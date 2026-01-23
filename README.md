@@ -2,6 +2,14 @@
 
 Authenticate to Linux servers using your Ethereum wallet. No passwords, no SSH keys - just your wallet signature.
 
+## Authentication Modes
+
+### Wallet Mode (Default)
+Simple file-based wallet → username mapping. Perfect for small deployments.
+
+### NFT Mode
+Enterprise-grade authentication via NFT ownership on EVM blockchains, with LDAP integration for username management and revocation.
+
 ## How It Works
 
 ```
@@ -22,22 +30,13 @@ Authenticate to Linux servers using your Ethereum wallet. No passwords, no SSH k
 │     │──── signature ────────────>│                               │
 │     │                            │                               │
 │     │                            │── recover wallet address      │
-│     │                            │── check wallets file          │
+│     │                            │── verify ownership            │
 │     │                            │── map to Linux username       │
 │     │                            │                               │
 │     │<── LOGIN SUCCESS ──────────│                               │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
-
-1. User attempts SSH login
-2. Server displays a one-time code and signing URL
-3. User opens the signing page and connects their wallet (MetaMask, etc.)
-4. User signs the message containing the OTP code
-5. User pastes the signature into the terminal
-6. Server recovers the wallet address from the signature
-7. Server looks up the wallet in the authorized wallets file
-8. If found, user is logged in as the mapped Linux user
 
 ## Quick Start
 
@@ -51,8 +50,11 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 sudo apt install libpam0g-dev  # Debian/Ubuntu
 sudo dnf install pam-devel     # Fedora/RHEL
 
-# Build
+# Build (wallet mode only)
 cargo build --release
+
+# Build with NFT support
+cargo build --release --features nft
 ```
 
 ### 2. Install
@@ -64,12 +66,12 @@ sudo cp target/release/libpam_web3.so /lib/security/pam_web3.so
 # Create config directory
 sudo mkdir -p /etc/pam_web3
 
-# Copy example config
-sudo cp examples/config.conf /etc/pam_web3/config.conf
+# Copy example config (choose wallet or nft mode)
+sudo cp examples/config-wallet.toml /etc/pam_web3/config.toml
 sudo cp examples/wallets /etc/pam_web3/wallets
 
 # Edit config with your settings
-sudo nano /etc/pam_web3/config.conf
+sudo nano /etc/pam_web3/config.toml
 ```
 
 ### 3. Configure PAM
@@ -90,7 +92,7 @@ See `examples/pam-sshd.conf` for more configuration options including:
 - Web3 auth for a group of users
 - Web3 auth for all users
 
-### 4. Add Authorized Wallets
+### 4. Add Authorized Wallets (Wallet Mode)
 
 Edit `/etc/pam_web3/wallets`:
 
@@ -106,38 +108,65 @@ Deploy `signing-page/index.html` to any web server, or use it locally.
 
 ## Configuration
 
-### `/etc/pam_web3/config.conf`
+### Wallet Mode (`/etc/pam_web3/config.toml`)
 
-```
-# URL to the signing page
-signing_url = https://your-server.com/sign
+```toml
+[machine]
+id = "my-server"
+secret_key = "0x<your-64-char-hex-key>"  # openssl rand -hex 32
 
-# Path to authorized wallets file
-wallets_path = /etc/pam_web3/wallets
-
-# OTP settings
+[auth]
+mode = "wallet"
+signing_url = "https://your-server.com/sign"
 otp_length = 6
 otp_ttl_seconds = 300
 
-# Machine identifier (shown to user when signing)
-machine_id = my-server
-
-# Secret key for OTP HMAC (32 bytes hex)
-# Generate with: openssl rand -hex 32
-secret_key = 0x<your_64_char_hex_key>
+[wallet]
+wallets_path = "/etc/pam_web3/wallets"
 ```
 
-### `/etc/pam_web3/wallets`
+### NFT Mode (`/etc/pam_web3/config.toml`)
 
-```
-# Authorized wallet addresses mapped to Linux usernames
-# Format: wallet_address:username
-# Addresses are case-insensitive, 0x prefix optional
+```toml
+[machine]
+id = "server-prod-01"
+private_key_file = "/etc/pam_web3/server.key"
 
-0x1234567890abcdef1234567890abcdef12345678:alice
-0xABCDEF1234567890ABCDEF1234567890ABCDEF12:bob
-deadbeef1234567890deadbeef1234567890dead:charlie
+[auth]
+mode = "nft"
+signing_url = "https://auth.example.com/verify"
+
+[blockchain]
+socket_path = "/run/web3-auth/web3-auth.sock"
+chain_id = 1
+nft_contract = "0x1234..."
+
+[ldap]
+server = "ldap://localhost:389"
+base_dn = "ou=nft,dc=example,dc=com"
+bind_dn = "cn=pam,dc=example,dc=com"
+bind_password_file = "/etc/pam_web3/ldap.secret"
 ```
+
+## NFT Mode Setup
+
+NFT mode requires additional components:
+
+1. **web3-auth-svc daemon** - Handles blockchain queries
+   ```bash
+   cd web3-auth-svc
+   cargo build --release
+   sudo cp target/release/web3-auth-svc /usr/local/bin/
+   ```
+
+2. **LDAP server** - Stores NFT → username mappings and revocation status
+
+3. **AccessCredentialNFT contract** - Deploy from `contracts/`
+
+4. **Machine keypair** - Generate with:
+   ```bash
+   cargo run --features nft --bin pam_web3_tool -- generate-keypair
+   ```
 
 ## Security
 
@@ -156,6 +185,7 @@ deadbeef1234567890deadbeef1234567890dead:charlie
 - **Replay attacks**: OTP bound to timestamp, expires quickly
 - **Man-in-the-middle**: Signature is over specific OTP + machine ID
 - **Compromised signing page**: Attacker can't forge signatures without wallet private key
+- **NFT revocation**: LDAP-based revocation immediately blocks access
 
 ## File Structure
 
@@ -164,12 +194,22 @@ libpam-web3/
 ├── Cargo.toml              # Rust package manifest
 ├── src/
 │   ├── lib.rs              # PAM module entry point
+│   ├── config.rs           # Configuration loading
 │   ├── otp.rs              # OTP generation and verification
-│   └── signature.rs        # Ethereum signature recovery
+│   ├── signature.rs        # Ethereum signature recovery
+│   ├── wallet_auth.rs      # Wallet mode authentication
+│   ├── blockchain.rs       # NFT blockchain client (nft feature)
+│   ├── ldap.rs             # LDAP client (nft feature)
+│   ├── ecies.rs            # Encryption schemes (nft feature)
+│   └── bin/
+│       └── pam_web3_tool.rs  # Admin CLI tool (nft feature)
+├── web3-auth-svc/          # Blockchain verification daemon
+├── contracts/              # AccessCredentialNFT smart contract
 ├── signing-page/
 │   └── index.html          # Web interface for signing
 └── examples/
-    ├── config.conf         # Example configuration
+    ├── config-wallet.toml  # Wallet mode configuration
+    ├── config-nft.toml     # NFT mode configuration
     ├── wallets             # Example wallets file
     └── pam-sshd.conf       # Example PAM configuration
 ```
@@ -179,6 +219,11 @@ libpam-web3/
 - Linux with PAM support
 - Rust 1.70+
 - PAM development headers (`libpam0g-dev` or `pam-devel`)
+
+For NFT mode additionally:
+- Running web3-auth-svc daemon
+- LDAP server
+- EVM-compatible blockchain (Ethereum, Polygon, etc.)
 
 ## Troubleshooting
 
@@ -208,13 +253,13 @@ Check PAM configuration syntax:
 sudo pamtester sshd yourusername authenticate
 ```
 
-## Roadmap
+### Check logs
 
-- [ ] NFT-based access credentials (authenticate via NFT ownership)
-- [ ] Blockchain-verified wallet authorization
-- [ ] LDAP integration for enterprise deployments
-- [ ] Credential expiration and revocation
-- [ ] Multi-chain support (Polygon, Arbitrum, etc.)
+```bash
+sudo journalctl -u sshd | grep pam_web3
+# or
+sudo tail -f /var/log/auth.log | grep pam_web3
+```
 
 ## License
 

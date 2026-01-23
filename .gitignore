@@ -1,6 +1,12 @@
 # Build artifacts
 /target/
+/web3-auth-svc/target/
 Cargo.lock
+
+# Foundry
+/contracts/out/
+/contracts/cache/
+/contracts/lib/
 
 # IDE
 .idea/
@@ -13,5 +19,7 @@ Cargo.lock
 .DS_Store
 Thumbs.db
 
-# Future NFT-based authentication (archived for later development)
-/_nft_future/
+# Secrets (never commit these!)
+*.key
+*.secret
+ldap.secret
