@@ -8,6 +8,7 @@ Cargo.lock
 /contracts/cache/
 /contracts/lib/
 /contracts/broadcast/
+/contracts/foundry.lock
 
 # IDE
 .idea/
@@ -24,3 +25,7 @@ Thumbs.db
 *.key
 *.secret
 ldap.secret
+
+# Internal planning files
+PLAN.md
+.gitmodules
