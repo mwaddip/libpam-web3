@@ -1,0 +1,57 @@
+# Example LDAP entries for libpam-web3 NFT mode
+#
+# Customize the base DN (dc=example,dc=com) for your environment.
+#
+# Install with:
+#   ldapadd -x -D "cn=admin,dc=example,dc=com" -W -f example-entries.ldif
+
+# Create the NFT organizational unit
+dn: ou=nft,dc=example,dc=com
+objectClass: organizationalUnit
+ou: nft
+description: NFT-based access credentials
+
+# Example credential for token ID 0
+dn: cn=token0,ou=nft,dc=example,dc=com
+objectClass: top
+objectClass: device
+objectClass: nftCredential
+cn: token0
+nftTokenId: 0
+nftRevoked: FALSE
+linuxUsername: johndoe
+walletAddress: 0xe35B5D114eFEA216E6BB5Ff15C261d25dB9E2cb9
+description: Server access credential for John Doe
+
+# Example credential for token ID 1
+dn: cn=token1,ou=nft,dc=example,dc=com
+objectClass: top
+objectClass: device
+objectClass: nftCredential
+cn: token1
+nftTokenId: 1
+nftRevoked: FALSE
+linuxUsername: janedoe
+walletAddress: 0x1234567890AbcdEF1234567890aBcdef12345678
+description: Server access credential for Jane Doe
+
+# Example revoked credential
+dn: cn=token2,ou=nft,dc=example,dc=com
+objectClass: top
+objectClass: device
+objectClass: nftCredential
+cn: token2
+nftTokenId: 2
+nftRevoked: TRUE
+linuxUsername: exemployee
+walletAddress: 0xDeadBeef00000000000000000000000000000000
+description: Revoked - employee terminated
+
+# PAM service account for LDAP lookups
+# Note: Generate password hash with: slappasswd -s YourPassword
+dn: cn=pam,dc=example,dc=com
+objectClass: simpleSecurityObject
+objectClass: organizationalRole
+cn: pam
+userPassword: {SSHA}REPLACE_WITH_HASHED_PASSWORD
+description: PAM bind user for NFT credential lookups
