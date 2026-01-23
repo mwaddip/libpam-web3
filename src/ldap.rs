@@ -49,7 +49,7 @@ impl LdapClient {
     /// Validate an NFT and get the associated username
     ///
     /// # Arguments
-    /// * `token_id` - The NFT token ID to validate
+    /// * `token_id` - The NFT token ID to validate (hex or decimal)
     /// * `wallet_address` - The wallet address (for additional validation)
     ///
     /// # Returns
@@ -59,6 +59,9 @@ impl LdapClient {
         token_id: &str,
         wallet_address: &str,
     ) -> Result<LdapValidationResult, LdapError> {
+        // Normalize token ID: convert hex to decimal if needed
+        let token_id = normalize_token_id(token_id);
+
         // Connect to LDAP
         let settings = LdapConnSettings::new()
             .set_conn_timeout(Duration::from_secs(self.config.timeout_seconds));
@@ -76,7 +79,7 @@ impl LdapClient {
         let filter = format!(
             "(&({}={}))",
             self.config.token_id_attribute,
-            escape_ldap_filter(token_id)
+            escape_ldap_filter(&token_id)
         );
 
         let (rs, _res) = ldap
@@ -214,6 +217,24 @@ fn escape_ldap_filter(value: &str) -> String {
     }
 
     escaped
+}
+
+/// Normalize token ID: convert hex (0x...) to decimal string
+/// This allows LDAP entries to store token IDs as simple numbers
+fn normalize_token_id(token_id: &str) -> String {
+    let token_id = token_id.trim();
+
+    // If it's a hex string, convert to decimal
+    if let Some(hex_str) = token_id.strip_prefix("0x") {
+        // Parse as u128 to handle large token IDs (up to 128 bits)
+        // For full uint256, we'd need BigInt, but most token IDs fit in u128
+        if let Ok(num) = u128::from_str_radix(hex_str, 16) {
+            return num.to_string();
+        }
+    }
+
+    // Already decimal or couldn't parse - return as-is
+    token_id.to_string()
 }
 
 #[cfg(test)]

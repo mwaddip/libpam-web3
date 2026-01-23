@@ -128,19 +128,34 @@ impl JsonRpcBackend {
 
     /// Fetch metadata from URI
     async fn fetch_metadata(&self, uri: &str) -> Result<NftMetadata, BackendError> {
-        let uri = resolve_uri(uri);
+        // Handle data URIs (on-chain metadata)
+        let json: serde_json::Value = if let Some(data) = uri.strip_prefix("data:application/json;base64,") {
+            use base64::Engine;
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .map_err(|e| BackendError::InvalidResponse(format!("base64 decode failed: {}", e)))?;
+            serde_json::from_slice(&decoded)
+                .map_err(|e| BackendError::InvalidResponse(format!("JSON parse failed: {}", e)))?
+        } else if let Some(data) = uri.strip_prefix("data:application/json,") {
+            // URL-encoded JSON (less common)
+            serde_json::from_str(data)
+                .map_err(|e| BackendError::InvalidResponse(format!("JSON parse failed: {}", e)))?
+        } else {
+            // HTTP/IPFS/Arweave URIs
+            let uri = resolve_uri(uri);
+            let response = self.client.get(&uri).send().await?;
 
-        let response = self.client.get(&uri).send().await?;
+            if !response.status().is_success() {
+                return Err(BackendError::HttpError(format!(
+                    "HTTP {}",
+                    response.status()
+                )));
+            }
 
-        if !response.status().is_success() {
-            return Err(BackendError::HttpError(format!(
-                "HTTP {}",
-                response.status()
-            )));
-        }
+            response.json().await?
+        };
 
         // Parse as generic JSON first to extract access data
-        let json: serde_json::Value = response.json().await?;
 
         let access = json.get("access").and_then(|a| {
             Some(AccessData {
