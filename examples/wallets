@@ -1,0 +1,11 @@
+# Wallet to username mappings for pam_web3
+# Format: wallet_address:username
+# Location: /etc/pam_web3/wallets
+#
+# Wallet addresses are case-insensitive
+# 0x prefix is optional
+
+# Example entries:
+0x1234567890abcdef1234567890abcdef12345678:alice
+0xABCDEF1234567890ABCDEF1234567890ABCDEF12:bob
+deadbeef1234567890deadbeef1234567890dead:charlie

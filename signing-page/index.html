@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Web3 Auth</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;background:#0a0a0a;color:#e0e0e0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.c{max-width:440px;width:100%;background:#1a1a1a;border-radius:12px;padding:24px;box-shadow:0 4px 24px rgba(0,0,0,.5)}
+h1{font-size:1.25rem;margin-bottom:16px;color:#fff}
+label{display:block;margin-bottom:6px;font-size:.875rem;color:#888}
+input{width:100%;padding:12px;border:1px solid #333;border-radius:8px;background:#0a0a0a;color:#fff;font-size:1rem;margin-bottom:16px;font-family:inherit}
+input:focus{outline:none;border-color:#3b82f6}
+button{width:100%;padding:12px;border:none;border-radius:8px;font-size:1rem;cursor:pointer;transition:background .2s}
+.btn-primary{background:#3b82f6;color:#fff}
+.btn-primary:hover{background:#2563eb}
+.btn-primary:disabled{background:#1e3a5f;cursor:not-allowed}
+.btn-secondary{background:#4b5563;color:#fff;margin-top:8px}
+.btn-secondary:hover{background:#374151}
+.btn-copy{background:#22c55e;color:#fff;margin-top:8px}
+.btn-copy:hover{background:#16a34a}
+.result{margin-top:16px;padding:12px;background:#0a0a0a;border-radius:8px;word-break:break-all;font-family:monospace;font-size:.75rem;max-height:120px;overflow-y:auto}
+.status{text-align:center;padding:8px;margin-bottom:16px;border-radius:6px;font-size:.875rem}
+.status.error{background:#7f1d1d;color:#fca5a5}
+.status.success{background:#14532d;color:#86efac}
+.hidden{display:none}
+.wallet{font-size:.75rem;color:#666;margin-bottom:16px;word-break:break-all}
+.info{font-size:.75rem;color:#888;margin-bottom:16px;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="c">
+<h1>Web3 Authentication</h1>
+<div id="status" class="status hidden"></div>
+
+<div id="connect-section">
+<p class="info">Sign in to your server using your Ethereum wallet. Connect your wallet to get started.</p>
+<button id="connect" class="btn-primary">Connect Wallet</button>
+</div>
+
+<div id="main-section" class="hidden">
+<div id="wallet" class="wallet"></div>
+
+<div id="sign-form">
+<label for="code">Enter OTP Code</label>
+<input type="text" id="code" placeholder="123456" maxlength="8" autocomplete="off">
+<label for="machine">Machine ID</label>
+<input type="text" id="machine" placeholder="server-prod-01" autocomplete="off">
+<button id="sign" class="btn-primary">Sign Message</button>
+</div>
+
+<div id="result-section" class="hidden">
+<label>Signature (paste this in terminal)</label>
+<div id="sig" class="result"></div>
+<button id="copy" class="btn-copy">Copy to Clipboard</button>
+<button id="reset" class="btn-secondary">Sign Another</button>
+</div>
+</div>
+</div>
+
+<script>
+(function(){
+let addr='';
+const $=id=>document.getElementById(id);
+const show=(id,v=true)=>$(id).classList.toggle('hidden',!v);
+const status=(msg,type='success')=>{const s=$('status');s.textContent=msg;s.className='status '+type;show('status')};
+
+async function connect(){
+    if(!window.ethereum){status('No wallet found. Install MetaMask.','error');return}
+    try{
+        const accs=await window.ethereum.request({method:'eth_requestAccounts'});
+        addr=accs[0];
+        $('wallet').textContent='Connected: '+addr;
+        show('connect-section',false);
+        show('main-section');
+        show('status',false);
+    }catch(e){status('Connection rejected','error')}
+}
+
+async function sign(){
+    const code=$('code').value.trim();
+    const machine=$('machine').value.trim();
+    if(!code){status('Enter OTP code','error');return}
+    if(!machine){status('Enter machine ID','error');return}
+    const msg='Authenticate to '+machine+' with code: '+code;
+    try{
+        $('sign').disabled=true;
+        $('sign').textContent='Signing...';
+        const sig=await window.ethereum.request({method:'personal_sign',params:[msg,addr]});
+        $('sig').textContent=sig;
+        show('sign-form',false);
+        show('result-section');
+        status('Signed successfully! Copy and paste below.','success');
+    }catch(e){
+        status('Signing failed: '+e.message,'error');
+    }finally{
+        $('sign').disabled=false;
+        $('sign').textContent='Sign Message';
+    }
+}
+
+function copy(){
+    navigator.clipboard.writeText($('sig').textContent).then(()=>{
+        $('copy').textContent='Copied!';
+        setTimeout(()=>$('copy').textContent='Copy to Clipboard',2000);
+    });
+}
+
+function reset(){
+    show('sign-form');
+    show('result-section',false);
+    $('code').value='';
+    show('status',false);
+}
+
+$('connect').onclick=connect;
+$('sign').onclick=sign;
+$('copy').onclick=copy;
+$('reset').onclick=reset;
+$('code').onkeypress=e=>{if(e.key==='Enter')$('machine').focus()};
+$('machine').onkeypress=e=>{if(e.key==='Enter')sign()};
+
+// Auto-connect if already connected
+if(window.ethereum&&window.ethereum.selectedAddress){
+    addr=window.ethereum.selectedAddress;
+    $('wallet').textContent='Connected: '+addr;
+    show('connect-section',false);
+    show('main-section');
+}
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+[package]
+name = "pam_web3"
+version = "0.1.0"
+edition = "2021"
+description = "PAM module for Ethereum wallet-based authentication"
+license = "MIT"
+repository = "https://github.com/yourusername/libpam-web3"
+keywords = ["pam", "authentication", "ethereum", "web3", "wallet"]
+categories = ["authentication"]
+
+[lib]
+name = "pam_web3"
+crate-type = ["cdylib"]
+
+[dependencies]
+# PAM bindings
+pam = { version = "0.8", features = ["module"] }
+
+# Ethereum signature recovery
+alloy-primitives = "0.8"
+k256 = { version = "0.13", features = ["ecdsa"] }
+
+# Hashing
+sha3 = "0.10"
+
+# Crypto / randomness
+rand = "0.8"
+hex = "0.4"
+
+# System
+libc = "0.2"
+
+# Error handling
+thiserror = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
