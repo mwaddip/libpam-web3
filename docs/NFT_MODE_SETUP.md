@@ -395,6 +395,55 @@ sudo useradd -m johndoe
 7. Copy and paste the signature
 8. You're logged in!
 
+## Client-Side Signing Page
+
+The NFT contains an embedded signing page in its `animation_url` field. Users can extract and host this locally to sign authentication messages with MetaMask.
+
+### Why Local Hosting?
+
+Browsers (MetaMask, Firefox) block wallet connections on `file://` URLs for security reasons. The scripts below extract the signing page and serve it via `http://localhost` so MetaMask can connect.
+
+### Linux / macOS
+
+```bash
+# Extract and host signing page from NFT
+./scripts/extract-signing-page.sh \
+  --contract 0xYourContractAddress \
+  --token-id 0
+
+# With custom RPC
+./scripts/extract-signing-page.sh \
+  --rpc-url https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY \
+  --contract 0xYourContractAddress \
+  --token-id 5 \
+  --port 9000
+```
+
+Requirements: `curl` and `python3` (pre-installed on most Linux/macOS systems)
+
+### Windows (PowerShell)
+
+```powershell
+# Extract and host signing page from NFT
+.\scripts\extract-signing-page.ps1 -Contract "0xYourContractAddress" -TokenId 0
+
+# With custom RPC
+.\scripts\extract-signing-page.ps1 `
+  -RpcUrl "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY" `
+  -Contract "0xYourContractAddress" `
+  -TokenId 5 `
+  -Port 9000
+```
+
+Requirements: PowerShell 5.1+ (included in Windows 10/11)
+
+Note: On Windows, you may need to run as Administrator or add a URL reservation:
+```powershell
+netsh http add urlacl url=http://+:8080/ user=Everyone
+```
+
+---
+
 ## Troubleshooting
 
 ### Check PAM logs
