@@ -64,6 +64,10 @@ pub struct AuthConfig {
     /// OTP validity in seconds (default: 300)
     #[serde(default = "default_otp_ttl")]
     pub otp_ttl_seconds: u64,
+    /// NFT lookup method: "ldap" or "passwd" (default: ldap)
+    /// Only used when mode = "nft"
+    #[serde(default)]
+    pub nft_lookup: NftLookupMethod,
 }
 
 /// Authentication mode
@@ -72,6 +76,17 @@ pub struct AuthConfig {
 pub enum AuthMode {
     Wallet,
     Nft,
+}
+
+/// NFT lookup method for mapping token IDs to usernames
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NftLookupMethod {
+    /// Use LDAP for token ID to username mapping and revocation checking
+    #[default]
+    Ldap,
+    /// Use /etc/passwd GECOS field (format: "nft:TOKEN_ID" in comment field)
+    Passwd,
 }
 
 /// Wallet mode configuration
@@ -182,15 +197,16 @@ impl Config {
                 }
             }
             AuthMode::Nft => {
-                // NFT mode requires private_key_file, blockchain, and ldap config
+                // NFT mode requires private_key_file and blockchain config
                 if self.machine.private_key_file.is_none() {
                     return Err(ConfigError::MissingField("machine.private_key_file"));
                 }
                 if self.blockchain.is_none() {
                     return Err(ConfigError::MissingField("[blockchain] section"));
                 }
-                if self.ldap.is_none() {
-                    return Err(ConfigError::MissingField("[ldap] section"));
+                // LDAP config only required when using LDAP lookup
+                if self.auth.nft_lookup == NftLookupMethod::Ldap && self.ldap.is_none() {
+                    return Err(ConfigError::MissingField("[ldap] section (required when nft_lookup = \"ldap\")"));
                 }
             }
         }

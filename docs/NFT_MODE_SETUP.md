@@ -10,15 +10,27 @@ NFT mode authentication flow:
 3. PAM module verifies the signature and recovers the wallet address
 4. web3-auth-svc queries the blockchain to find NFTs owned by the wallet
 5. NFT metadata contains encrypted machine ID - decrypted with server's private key
-6. If machine ID matches, LDAP is queried for username and revocation status
+6. If machine ID matches, username is looked up via:
+   - **LDAP** (default): Query LDAP for token ID → username mapping and revocation status
+   - **passwd**: Look for `nft=TOKEN_ID` in the user's GECOS field in `/etc/passwd`
 7. User is logged in as the mapped Linux username
+
+## Lookup Methods
+
+NFT mode supports two methods for mapping NFT token IDs to Linux usernames:
+
+| Method | Config | Use Case |
+|--------|--------|----------|
+| LDAP | `nft_lookup = "ldap"` | Centralized user management, revocation support, multiple servers |
+| passwd | `nft_lookup = "passwd"` | Simple setups, single server, no LDAP infrastructure needed |
 
 ## Prerequisites
 
 - Linux server with PAM support
 - Rust toolchain (for building)
 - Foundry (for contract deployment)
-- OpenLDAP server
+- **For LDAP lookup**: OpenLDAP server (or compatible)
+- **For passwd lookup**: Users created in `/etc/passwd` with GECOS field containing `nft=TOKEN_ID`
 - Ethereum wallet with testnet ETH (for contract deployment)
 
 ## Step 1: Deploy the NFT Contract
@@ -267,8 +279,15 @@ sudo systemctl start web3-auth-svc
 
 ```bash
 sudo mkdir -p /etc/pam_web3
+```
 
-# Create main config
+Choose your lookup method:
+
+#### Option A: LDAP Lookup (default)
+
+Use LDAP for centralized token ID → username mapping with revocation support:
+
+```bash
 sudo tee /etc/pam_web3/config.toml > /dev/null << 'EOF'
 [machine]
 id = "your-server-hostname"
@@ -276,6 +295,7 @@ private_key_file = "/etc/pam_web3/server.key"
 
 [auth]
 mode = "nft"
+nft_lookup = "ldap"  # default, can be omitted
 signing_url = "http://your-server:8080"
 otp_length = 6
 otp_ttl_seconds = 300
@@ -305,6 +325,63 @@ sudo chmod 600 /etc/pam_web3/ldap.secret
 sudo chmod 600 /etc/pam_web3/server.key
 sudo chmod 644 /etc/pam_web3/config.toml
 ```
+
+#### Option B: Passwd Lookup (simple, no LDAP)
+
+For simpler setups, use `/etc/passwd` GECOS fields to map token IDs to usernames.
+
+**Config file (no LDAP section needed):**
+
+```bash
+sudo tee /etc/pam_web3/config.toml > /dev/null << 'EOF'
+[machine]
+id = "your-server-hostname"
+private_key_file = "/etc/pam_web3/server.key"
+
+[auth]
+mode = "nft"
+nft_lookup = "passwd"  # Use /etc/passwd instead of LDAP
+signing_url = "http://your-server:8080"
+otp_length = 6
+otp_ttl_seconds = 300
+
+[blockchain]
+socket_path = "/run/web3-auth/web3-auth.sock"
+chain_id = 11155111
+nft_contract = "0xYourContractAddress"
+timeout_seconds = 10
+EOF
+
+# Set permissions
+sudo chmod 600 /etc/pam_web3/server.key
+sudo chmod 644 /etc/pam_web3/config.toml
+```
+
+**Create users with NFT token IDs in GECOS field:**
+
+The GECOS field (5th field in `/etc/passwd`, typically used for user info) must contain `nft=TOKEN_ID`:
+
+```bash
+# Create user with NFT token ID 0
+sudo useradd -m -c "nft=0" johndoe
+
+# Or update existing user's GECOS field
+sudo usermod -c "John Doe,nft=0" johndoe
+
+# Multiple items can be comma-separated
+sudo usermod -c "Jane Doe,Engineering,nft=5" janedoe
+```
+
+Verify the GECOS field:
+```bash
+getent passwd johndoe
+# johndoe:x:1001:1001:nft=0:/home/johndoe:/bin/bash
+```
+
+**Note:** Passwd lookup does not support revocation. To revoke access, either:
+- Remove the `nft=TOKEN_ID` from the user's GECOS field
+- Delete the user account
+- Transfer or burn the NFT on-chain
 
 ### Configure SSH PAM
 

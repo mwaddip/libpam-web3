@@ -34,8 +34,12 @@ pub mod blockchain;
 pub mod ecies;
 #[cfg(feature = "nft")]
 pub mod ldap;
+#[cfg(feature = "nft")]
+pub mod passwd_lookup;
 
 use config::{AuthMode, Config};
+#[cfg(feature = "nft")]
+use config::NftLookupMethod;
 use otp::Otp;
 use pam::ffi::{pam_conv, pam_get_item, pam_set_item, PAM_CONV, PAM_USER};
 use pam::{export_pam_module, PamHandle, PamModule, PamReturnCode};
@@ -295,7 +299,28 @@ fn nft_authenticate(
 
     syslog(&format!("NFT verified, token_id: {}", nft_result.token_id));
 
-    // Check LDAP for revocation and get username
+    // Look up username based on configured method
+    let username = match config.auth.nft_lookup {
+        NftLookupMethod::Ldap => {
+            syslog("Using LDAP lookup");
+            nft_ldap_lookup(config, &nft_result.token_id, wallet_address)?
+        }
+        NftLookupMethod::Passwd => {
+            syslog("Using passwd lookup");
+            nft_passwd_lookup(&nft_result.token_id)?
+        }
+    };
+
+    Ok(username)
+}
+
+/// Look up username via LDAP (checks revocation status)
+#[cfg(feature = "nft")]
+fn nft_ldap_lookup(
+    config: &Config,
+    token_id: &str,
+    wallet_address: &alloy_primitives::Address,
+) -> Result<String, AuthError> {
     let ldap_password = config
         .load_ldap_password()
         .map_err(|_| AuthError::LdapError)?;
@@ -304,7 +329,7 @@ fn nft_authenticate(
     let ldap_client = ldap::LdapClient::new(ldap_config.clone(), ldap_password);
 
     let validation_result = ldap_client
-        .validate_nft(&nft_result.token_id, &format!("{}", wallet_address))
+        .validate_nft(token_id, &format!("{}", wallet_address))
         .map_err(|e| {
             syslog(&format!("LDAP validation failed: {:?}", e));
             match e {
@@ -314,6 +339,17 @@ fn nft_authenticate(
         })?;
 
     Ok(validation_result.username)
+}
+
+/// Look up username via /etc/passwd GECOS field
+#[cfg(feature = "nft")]
+fn nft_passwd_lookup(token_id: &str) -> Result<String, AuthError> {
+    let result = passwd_lookup::lookup_by_token_id(token_id).map_err(|e| {
+        syslog(&format!("Passwd lookup failed: {:?}", e));
+        AuthError::NftNotFound
+    })?;
+
+    Ok(result.username)
 }
 
 /// Authentication error types

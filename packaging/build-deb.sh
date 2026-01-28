@@ -200,6 +200,10 @@ private_key_file = "/etc/pam_web3/server.key"
 [auth]
 # Authentication mode: "nft" for NFT-based auth
 mode = "nft"
+# NFT lookup method: "ldap" (default) or "passwd"
+# - ldap: Query LDAP for token ID → username mapping (requires [ldap] section)
+# - passwd: Look for nft=TOKEN_ID in /etc/passwd GECOS field (no LDAP needed)
+nft_lookup = "ldap"
 # URL where users can sign messages (displayed during login)
 signing_url = "http://localhost:8080"
 # OTP settings
@@ -300,9 +304,18 @@ Quick Start
 
 2. Deploy an NFT contract and mint access tokens (see upstream docs)
 
-3. Configure LDAP:
+3. Configure username lookup (choose one):
+
+   Option A - LDAP (default, supports revocation):
    - Import schema from /usr/share/libpam-web3/ldap/nft-schema.ldif
    - Add entries mapping NFT token IDs to Linux usernames
+   - Set nft_lookup = "ldap" in config (or omit, it's the default)
+
+   Option B - passwd (simple, no LDAP needed):
+   - Create users with nft=TOKEN_ID in GECOS field:
+     useradd -m -c "nft=0" johndoe
+   - Set nft_lookup = "passwd" in config
+   - Remove the [ldap] section from config
 
 4. Update configuration:
    - /etc/pam_web3/config.toml (PAM module settings)
