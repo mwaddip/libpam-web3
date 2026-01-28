@@ -29,3 +29,7 @@ ldap.secret
 # Internal planning files
 PLAN.md
 .gitmodules
+
+# Packaging artifacts
+/packaging/*.deb
+/packaging/libpam-web3_*/
