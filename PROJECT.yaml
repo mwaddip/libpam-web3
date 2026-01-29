@@ -1,0 +1,409 @@
+# libpam-web3 Project Documentation
+# Machine-readable project specification for integration and automation
+# Version: 0.2.0
+
+project:
+  name: libpam-web3
+  description: PAM module for Linux authentication via Ethereum wallet signatures
+  version: "0.2.0"
+  license: MIT
+  repository: https://github.com/mwaddip/libpam-web3
+  language: Rust
+  edition: "2021"
+
+overview:
+  summary: |
+    A PAM (Pluggable Authentication Module) that authenticates Linux users
+    by verifying Ethereum wallet signatures. Supports two modes: simple
+    wallet-based auth and NFT-based access control with blockchain verification.
+
+  authentication_flow:
+    - User connects via SSH, sees OTP code and signing URL
+    - User signs message with Ethereum wallet (MetaMask, etc.)
+    - User pastes signature into terminal
+    - PAM module recovers wallet address via secp256k1 ecrecover
+    - Username lookup based on mode (wallet file or NFT/LDAP/passwd)
+    - User logged in as mapped Linux username
+
+  modes:
+    wallet:
+      description: Simple file-based wallet address to username mapping
+      config_section: "[wallet]"
+      dependencies: []
+      use_case: Simple setups, single server, known wallet addresses
+
+    nft:
+      description: NFT ownership verification with LDAP or passwd username lookup
+      config_section: "[blockchain], [ldap] (optional)"
+      dependencies: [web3-auth-svc, OpenLDAP (optional)]
+      use_case: Dynamic access control, transferable credentials, enterprise
+
+architecture:
+  components:
+    pam_module:
+      binary: libpam_web3.so
+      install_path: /lib/x86_64-linux-gnu/security/
+      source: src/lib.rs
+      description: Core PAM module, loaded by sshd/login
+
+    web3_auth_svc:
+      binary: web3-auth-svc
+      install_path: /usr/local/bin/ or /usr/bin/
+      source: web3-auth-svc/
+      description: Daemon for blockchain queries (NFT mode only)
+      socket: /run/web3-auth/web3-auth.sock
+
+    pam_web3_tool:
+      binary: pam_web3_tool
+      install_path: /usr/local/bin/ or /usr/bin/
+      source: src/bin/pam_web3_tool.rs
+      description: CLI for keypair generation and encryption
+      requires_feature: nft
+
+  source_modules:
+    lib.rs: PAM entry point, mode dispatch, authentication orchestration
+    config.rs: TOML configuration loading and validation
+    otp.rs: OTP generation (HMAC-SHA3 with machine_id + timestamp)
+    signature.rs: secp256k1 ecrecover for wallet address recovery
+    wallet_auth.rs: Wallet mode file-based lookup
+    blockchain.rs: NFT mode Unix socket client to web3-auth-svc
+    ldap.rs: NFT mode LDAP username/revocation lookup
+    passwd_lookup.rs: NFT mode /etc/passwd GECOS field lookup
+    ecies.rs: ECIES encryption (secp256k1, x25519, AES-GCM)
+
+build:
+  commands:
+    wallet_mode_only:
+      command: cargo build --release
+      output: target/release/libpam_web3.so
+
+    nft_mode_full:
+      command: cargo build --release --features nft
+      outputs:
+        - target/release/libpam_web3.so
+        - target/release/pam_web3_tool
+
+    web3_auth_svc:
+      command: cd web3-auth-svc && cargo build --release
+      output: web3-auth-svc/target/release/web3-auth-svc
+
+    deb_package:
+      command: ./packaging/build-deb.sh
+      output: packaging/libpam-web3_0.2.0_amd64.deb
+
+    tests:
+      command: cargo test --features nft
+
+  features:
+    default: []
+    nft:
+      description: Enables NFT mode with blockchain, LDAP, and encryption support
+      adds_dependencies: [tokio, ldap3, serde_json, ecies, aes-gcm, crypto_box, base64, clap]
+      enables_binaries: [pam_web3_tool]
+
+configuration:
+  main_config:
+    path: /etc/pam_web3/config.toml
+    format: TOML
+
+  sections:
+    machine:
+      required: true
+      fields:
+        id:
+          type: string
+          required: true
+          description: Unique machine identifier (used in OTP and NFT verification)
+          example: "my-server-hostname"
+        secret_key:
+          type: string (hex)
+          required_for: wallet mode
+          description: HMAC key for OTP generation (32 bytes hex, 0x prefix optional)
+          example: "0x0123456789abcdef..."
+        private_key_file:
+          type: path
+          required_for: nft mode
+          description: Path to ECIES private key file
+          example: "/etc/pam_web3/server.key"
+
+    auth:
+      required: true
+      fields:
+        mode:
+          type: enum
+          values: [wallet, nft]
+          required: true
+          description: Authentication mode
+        nft_lookup:
+          type: enum
+          values: [ldap, passwd]
+          default: ldap
+          required: false
+          description: NFT mode username lookup method
+        signing_url:
+          type: url
+          required: true
+          description: URL displayed to user for wallet signing
+          example: "http://localhost:8080"
+        otp_length:
+          type: integer
+          default: 6
+          description: Length of OTP code
+        otp_ttl_seconds:
+          type: integer
+          default: 300
+          description: OTP validity period in seconds
+
+    wallet:
+      required_for: wallet mode
+      fields:
+        wallets_path:
+          type: path
+          default: "/etc/pam_web3/wallets"
+          description: Path to wallet address to username mapping file
+
+    blockchain:
+      required_for: nft mode
+      fields:
+        socket_path:
+          type: path
+          default: "/run/web3-auth/web3-auth.sock"
+          description: Unix socket for web3-auth-svc
+        chain_id:
+          type: integer
+          required: true
+          description: Ethereum chain ID (1=mainnet, 11155111=sepolia)
+        nft_contract:
+          type: string (address)
+          required: true
+          description: NFT contract address
+          example: "0x713F72Ba266dB7A11b12886514a4A7FCb3402d94"
+        timeout_seconds:
+          type: integer
+          default: 10
+
+    ldap:
+      required_for: nft mode with nft_lookup=ldap
+      fields:
+        server:
+          type: url
+          required: true
+          example: "ldap://localhost:389"
+        base_dn:
+          type: string
+          required: true
+          example: "ou=nft,dc=example,dc=com"
+        bind_dn:
+          type: string
+          required: true
+          example: "cn=pam,dc=example,dc=com"
+        bind_password_file:
+          type: path
+          required: true
+          example: "/etc/pam_web3/ldap.secret"
+        token_id_attribute:
+          type: string
+          default: "nftTokenId"
+        revoked_attribute:
+          type: string
+          default: "nftRevoked"
+        username_attribute:
+          type: string
+          default: "linuxUsername"
+        timeout_seconds:
+          type: integer
+          default: 10
+
+  web3_auth_svc_config:
+    path: /etc/web3-auth/config.toml
+    format: TOML
+    fields:
+      socket_path:
+        type: path
+        default: "/run/web3-auth/web3-auth.sock"
+      backend:
+        type: enum
+        values: [jsonrpc, etherscan]
+        default: jsonrpc
+      default_chain_id:
+        type: integer
+        example: 11155111
+      default_contract:
+        type: string (address)
+      jsonrpc.rpc_url:
+        type: url
+        example: "https://ethereum-sepolia-rpc.publicnode.com"
+      jsonrpc.timeout_seconds:
+        type: integer
+        default: 30
+
+files:
+  configuration:
+    - path: /etc/pam_web3/config.toml
+      description: Main PAM module configuration
+      permissions: "640"
+    - path: /etc/pam_web3/server.key
+      description: ECIES private key (NFT mode)
+      permissions: "600"
+    - path: /etc/pam_web3/ldap.secret
+      description: LDAP bind password (NFT mode with LDAP)
+      permissions: "600"
+    - path: /etc/pam_web3/wallets
+      description: Wallet to username mappings (wallet mode)
+      permissions: "644"
+      format: "address:username per line"
+    - path: /etc/web3-auth/config.toml
+      description: web3-auth-svc configuration
+      permissions: "644"
+
+  binaries:
+    - path: /lib/x86_64-linux-gnu/security/libpam_web3.so
+      description: PAM module
+    - path: /usr/bin/web3-auth-svc
+      description: Blockchain query daemon
+    - path: /usr/bin/pam_web3_tool
+      description: Key generation CLI
+
+  systemd:
+    - path: /usr/lib/systemd/system/web3-auth-svc.service
+      description: web3-auth-svc systemd unit
+
+integration:
+  pam_configuration:
+    file: /etc/pam.d/sshd
+    example: |
+      # Add before @include common-auth:
+      auth [success=2 default=ignore] pam_succeed_if.so user != web3user1 user != web3user2
+      auth [success=1 default=die] pam_web3.so
+      @include common-auth
+    description: |
+      The pam_succeed_if line lists users that should use web3 auth.
+      Other users fall through to standard auth.
+
+  ssh_configuration:
+    file: /etc/ssh/sshd_config
+    required_settings:
+      KbdInteractiveAuthentication: "yes"
+      UsePAM: "yes"
+
+  user_setup:
+    wallet_mode:
+      steps:
+        - Create Linux user (useradd)
+        - Add wallet address to /etc/pam_web3/wallets
+      wallets_format: |
+        0xWalletAddress1:username1
+        0xWalletAddress2:username2
+
+    nft_mode_ldap:
+      steps:
+        - Create Linux user
+        - Add LDAP schema (/usr/share/libpam-web3/ldap/nft-schema.ldif)
+        - Add LDAP entry mapping token ID to username
+      ldap_entry_example: |
+        dn: cn=token0,ou=nft,dc=example,dc=com
+        objectClass: nftCredential
+        nftTokenId: 0
+        linuxUsername: johndoe
+        nftRevoked: FALSE
+
+    nft_mode_passwd:
+      steps:
+        - Create Linux user with nft=TOKEN_ID in GECOS field
+      command_example: |
+        useradd -m -c "nft=0" johndoe
+        # Or update existing:
+        usermod -c "John Doe,nft=0" johndoe
+      gecos_format: "nft=TOKEN_ID (can be comma-separated with other info)"
+
+cli_tools:
+  pam_web3_tool:
+    commands:
+      generate-keypair:
+        description: Generate ECIES keypair for NFT mode
+        usage: pam_web3_tool generate-keypair --output /etc/pam_web3/server.key
+        output: Writes private key to file, prints public key to stdout
+
+      encrypt:
+        description: Encrypt machine ID for NFT minting
+        usage: pam_web3_tool encrypt --machine-id "hostname" --server-pubkey "04..."
+        output: Encrypted bytes for NFT metadata
+
+  extract_signing_page:
+    platforms:
+      linux: scripts/extract-signing-page.sh
+      windows: scripts/extract-signing-page.ps1
+    description: Extract signing page from NFT and host locally
+    usage: |
+      ./scripts/extract-signing-page.sh --contract 0x... --token-id 0
+    purpose: MetaMask requires http:// URLs, not file:// URLs
+
+smart_contract:
+  path: contracts/src/AccessCredentialNFT.sol
+  type: ERC-721
+  deployment:
+    tool: Foundry (forge)
+    command: |
+      forge create src/AccessCredentialNFT.sol:AccessCredentialNFT \
+        --rpc-url $RPC_URL --private-key $DEPLOYER_KEY \
+        --constructor-args "Access Credentials" "ACCESS" "$SIGNING_PAGE_BASE64" "$IMAGE_URI"
+  minting:
+    function: "mint(address,bytes,bytes,string,string,string,uint256)"
+    parameters:
+      - to: Recipient wallet address
+      - serverEncryptedMachineId: ECIES encrypted machine ID
+      - clientEncryptedMachineId: Optional client-side encryption (0x for none)
+      - signingSecret: Optional signing secret (empty string for none)
+      - name: Token name/description
+      - image: Image URI (ipfs:// or data:)
+      - expiresAt: Unix timestamp (0 for no expiry)
+
+security:
+  considerations:
+    - Store private keys (server.key, deployer.key) securely, never commit to git
+    - LDAP bind password should have restricted read access
+    - OTP TTL should balance usability and security (default 300s)
+    - web3-auth-svc socket is root-only by default
+    - Consider using private RPC endpoints in production
+
+  revocation:
+    ldap_method: Set nftRevoked=TRUE in LDAP entry
+    passwd_method: Remove nft=TOKEN_ID from GECOS or delete user
+    blockchain_method: Transfer or burn the NFT
+
+troubleshooting:
+  logs:
+    pam_module: /var/log/auth.log (grep pam_web3)
+    web3_auth_svc: journalctl -u web3-auth-svc
+
+  common_issues:
+    signature_recovery_failed:
+      cause: Wrong message format or corrupted signature
+      check: Verify signing page uses correct message format
+
+    nft_not_found:
+      cause: Wallet doesn't own NFT, wrong contract address, or RPC issues
+      check: Verify NFT ownership with cast call balanceOf
+
+    ldap_validation_failed:
+      cause: Missing LDAP entry or token ID format mismatch
+      check: LDAP stores decimal token IDs, blockchain may return hex
+
+    connection_timeout:
+      cause: web3-auth-svc not running or socket permissions
+      check: systemctl status web3-auth-svc, ls -la /run/web3-auth/
+
+dependencies:
+  runtime:
+    required:
+      - libc6 (>= 2.31)
+      - libpam-runtime
+      - libssl3 or libssl1.1
+    optional:
+      - slapd (for LDAP mode)
+      - ldap-utils (for LDAP management)
+
+  build:
+    - Rust toolchain (rustc, cargo)
+    - OpenSSL development headers
+    - Foundry (for contract deployment)
