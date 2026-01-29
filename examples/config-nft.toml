@@ -1,0 +1,58 @@
+# libpam-web3 Configuration - NFT Mode
+#
+# NFT-based authentication with blockchain verification and LDAP.
+# Users sign an OTP with their wallet, the server verifies NFT ownership
+# via the blockchain, and looks up the username/revocation in LDAP.
+#
+# Requires:
+# - Build with: cargo build --release --features nft
+# - Running web3-auth-svc daemon
+# - LDAP server with NFT entries
+#
+# Copy to /etc/pam_web3/config.toml
+
+[machine]
+# Unique identifier for this machine
+# This is encrypted in the NFT and must match exactly
+id = "server-prod-01"
+
+# Path to machine's ECIES private key (32 bytes hex)
+# Generate with: pam_web3_tool generate-keypair
+private_key_file = "/etc/pam_web3/server.key"
+
+[auth]
+# Authentication mode: "wallet" or "nft"
+mode = "nft"
+
+# URL to the signing page
+signing_url = "https://auth.example.com/verify"
+
+# OTP settings
+otp_length = 6
+otp_ttl_seconds = 300
+
+[blockchain]
+# Unix socket path for web3-auth-svc daemon
+socket_path = "/run/web3-auth/web3-auth.sock"
+
+# Blockchain configuration
+chain_id = 1                                              # 1 = Ethereum mainnet, 137 = Polygon
+nft_contract = "0x1234567890abcdef1234567890abcdef12345678"  # AccessCredentialNFT address
+
+# Request timeout
+timeout_seconds = 10
+
+[ldap]
+# LDAP server for NFT validation and username lookup
+server = "ldap://localhost:389"
+base_dn = "ou=nft,dc=example,dc=com"
+bind_dn = "cn=pam,dc=example,dc=com"
+bind_password_file = "/etc/pam_web3/ldap.secret"
+
+# LDAP attribute names
+token_id_attribute = "nftTokenId"
+revoked_attribute = "nftRevoked"
+username_attribute = "linuxUsername"
+
+# Connection timeout
+timeout_seconds = 10

@@ -1,0 +1,31 @@
+# libpam-web3 Configuration - Wallet Mode
+#
+# Simple file-based wallet → username authentication.
+# Users sign an OTP with their wallet, and the server looks up
+# the wallet address in a local file to get the username.
+#
+# Copy to /etc/pam_web3/config.toml
+
+[machine]
+# Unique identifier for this machine (shown when signing)
+id = "my-server"
+
+# Secret key for OTP HMAC (32 bytes hex)
+# Generate with: openssl rand -hex 32
+secret_key = "0x<your-64-char-hex-key>"
+
+[auth]
+# Authentication mode: "wallet" or "nft"
+mode = "wallet"
+
+# URL to the signing page
+signing_url = "https://your-server.com/sign"
+
+# OTP settings
+otp_length = 6
+otp_ttl_seconds = 300
+
+[wallet]
+# Path to file mapping wallet addresses to usernames
+# Format: address:username (one per line)
+wallets_path = "/etc/pam_web3/wallets"
