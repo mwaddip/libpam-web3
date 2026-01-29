@@ -1,0 +1,37 @@
+# NFT Credential Schema for OpenLDAP
+#
+# This schema defines the nftCredential objectClass for storing
+# NFT-to-username mappings used by libpam-web3 NFT mode.
+#
+# Install with:
+#   sudo ldapadd -Y EXTERNAL -H ldapi:/// -f nft-schema.ldif
+
+dn: cn=nftCredential,cn=schema,cn=config
+objectClass: olcSchemaConfig
+cn: nftCredential
+olcAttributeTypes: {0}( 1.3.6.1.4.1.99999.1.1 NAME 'nftTokenId'
+  DESC 'NFT Token ID (decimal number)'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+olcAttributeTypes: {1}( 1.3.6.1.4.1.99999.1.2 NAME 'nftRevoked'
+  DESC 'NFT Revocation Status (TRUE/FALSE)'
+  EQUALITY booleanMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.7
+  SINGLE-VALUE )
+olcAttributeTypes: {2}( 1.3.6.1.4.1.99999.1.3 NAME 'linuxUsername'
+  DESC 'Linux Username to map NFT holder to'
+  EQUALITY caseExactMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+olcAttributeTypes: {3}( 1.3.6.1.4.1.99999.1.4 NAME 'walletAddress'
+  DESC 'Ethereum Wallet Address (optional, for validation)'
+  EQUALITY caseIgnoreMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+  SINGLE-VALUE )
+olcObjectClasses: {0}( 1.3.6.1.4.1.99999.2.1 NAME 'nftCredential'
+  DESC 'NFT-based access credential for libpam-web3'
+  SUP top
+  AUXILIARY
+  MUST ( nftTokenId $ linuxUsername )
+  MAY ( nftRevoked $ walletAddress ) )

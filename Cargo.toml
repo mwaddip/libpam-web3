@@ -1,22 +1,40 @@
 [package]
 name = "pam_web3"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "PAM module for Ethereum wallet-based authentication"
 license = "MIT"
-repository = "https://github.com/yourusername/libpam-web3"
-keywords = ["pam", "authentication", "ethereum", "web3", "wallet"]
+repository = "https://github.com/mwaddip/libpam-web3"
+keywords = ["pam", "authentication", "ethereum", "web3", "wallet", "nft"]
 categories = ["authentication"]
 
 [lib]
 name = "pam_web3"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "pam_web3_tool"
+path = "src/bin/pam_web3_tool.rs"
+required-features = ["nft"]
+
+[features]
+default = []
+nft = [
+    "dep:tokio",
+    "dep:ldap3",
+    "dep:serde_json",
+    "dep:ecies",
+    "dep:aes-gcm",
+    "dep:crypto_box",
+    "dep:base64",
+    "dep:clap",
+]
 
 [dependencies]
 # PAM bindings
 pam = { version = "0.8", features = ["module"] }
 
-# Ethereum signature recovery
+# Ethereum primitives and signature recovery
 alloy-primitives = "0.8"
 k256 = { version = "0.13", features = ["ecdsa"] }
 
@@ -32,6 +50,23 @@ libc = "0.2"
 
 # Error handling
 thiserror = "2"
+
+# Serialization (always needed for config)
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# NFT mode only
+tokio = { version = "1", features = ["rt"], optional = true }
+ldap3 = { version = "0.11", optional = true }
+serde_json = { version = "1", optional = true }
+ecies = { version = "0.2", optional = true }
+aes-gcm = { version = "0.10", optional = true }
+crypto_box = { version = "0.9", optional = true }
+base64 = { version = "0.22", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"
 
 [profile.release]
 opt-level = 3

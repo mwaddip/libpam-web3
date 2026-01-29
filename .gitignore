@@ -1,6 +1,14 @@
 # Build artifacts
 /target/
+/web3-auth-svc/target/
 Cargo.lock
+
+# Foundry
+/contracts/out/
+/contracts/cache/
+/contracts/lib/
+/contracts/broadcast/
+/contracts/foundry.lock
 
 # IDE
 .idea/
@@ -13,5 +21,15 @@ Cargo.lock
 .DS_Store
 Thumbs.db
 
-# Future NFT-based authentication (archived for later development)
-/_nft_future/
+# Secrets (never commit these!)
+*.key
+*.secret
+ldap.secret
+
+# Internal planning files
+PLAN.md
+.gitmodules
+
+# Packaging artifacts
+/packaging/*.deb
+/packaging/libpam-web3_*/
