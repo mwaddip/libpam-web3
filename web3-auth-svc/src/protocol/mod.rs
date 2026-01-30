@@ -17,8 +17,12 @@ pub struct Response {
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Single token ID (for backwards compatibility)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_id: Option<String>,
+    /// All token IDs owned by wallet
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_ids: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<MetadataResponse>,
 }
@@ -31,23 +35,32 @@ pub struct MetadataResponse {
     pub animation_url: Option<String>,
 }
 
-/// Parameters for verify_access method
+/// Parameters for get_nfts method (simplified - no server-side decryption needed)
 #[derive(Debug, Deserialize)]
-pub struct VerifyAccessParams {
+pub struct GetNftsParams {
     pub wallet_address: String,
-    pub machine_private_key: String,
-    pub expected_machine_id: String,
     pub contract_address: Option<String>,
     pub chain_id: Option<u64>,
 }
 
 impl Response {
-    pub fn success(token_id: String, metadata: Option<MetadataResponse>) -> Self {
+    pub fn success_single(token_id: String, metadata: Option<MetadataResponse>) -> Self {
         Self {
             success: true,
             error: None,
             token_id: Some(token_id),
+            token_ids: None,
             metadata,
+        }
+    }
+
+    pub fn success_multiple(token_ids: Vec<String>) -> Self {
+        Self {
+            success: true,
+            error: None,
+            token_id: None,
+            token_ids: Some(token_ids),
+            metadata: None,
         }
     }
 
@@ -56,6 +69,7 @@ impl Response {
             success: false,
             error: Some(message.into()),
             token_id: None,
+            token_ids: None,
             metadata: None,
         }
     }

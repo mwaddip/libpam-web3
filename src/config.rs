@@ -43,12 +43,9 @@ pub struct Config {
 pub struct MachineConfig {
     /// Unique identifier for this machine
     pub id: String,
-    /// Secret key for OTP HMAC (hex encoded, for wallet mode)
+    /// Secret key for OTP HMAC (hex encoded)
     #[serde(default)]
     pub secret_key: Option<String>,
-    /// Path to ECIES private key file (for NFT mode)
-    #[serde(default)]
-    pub private_key_file: Option<String>,
 }
 
 /// Authentication settings
@@ -197,9 +194,9 @@ impl Config {
                 }
             }
             AuthMode::Nft => {
-                // NFT mode requires private_key_file and blockchain config
-                if self.machine.private_key_file.is_none() {
-                    return Err(ConfigError::MissingField("machine.private_key_file"));
+                // NFT mode requires blockchain config and secret_key for OTP
+                if self.machine.secret_key.is_none() {
+                    return Err(ConfigError::MissingField("machine.secret_key"));
                 }
                 if self.blockchain.is_none() {
                     return Err(ConfigError::MissingField("[blockchain] section"));
@@ -213,7 +210,7 @@ impl Config {
         Ok(())
     }
 
-    /// Get the secret key bytes (for wallet mode OTP HMAC)
+    /// Get the secret key bytes (for OTP HMAC)
     pub fn secret_key_bytes(&self) -> Result<Vec<u8>, ConfigError> {
         let key = self
             .machine
@@ -223,21 +220,6 @@ impl Config {
         let key = key.strip_prefix("0x").unwrap_or(key);
         hex::decode(key).map_err(|e| {
             ConfigError::InvalidConfig(format!("invalid hex in secret_key: {}", e))
-        })
-    }
-
-    /// Load the ECIES private key (for NFT mode)
-    pub fn load_private_key(&self) -> Result<Vec<u8>, ConfigError> {
-        let path = self
-            .machine
-            .private_key_file
-            .as_ref()
-            .ok_or(ConfigError::MissingField("machine.private_key_file"))?;
-        let key_hex = fs::read_to_string(path)?;
-        let key_hex = key_hex.trim();
-        let key_hex = key_hex.strip_prefix("0x").unwrap_or(key_hex);
-        hex::decode(key_hex).map_err(|e| {
-            ConfigError::InvalidConfig(format!("invalid hex in private key file: {}", e))
         })
     }
 
@@ -284,7 +266,7 @@ wallets_path = "/etc/pam_web3/wallets"
         let config_str = r#"
 [machine]
 id = "server-prod-01"
-private_key_file = "/etc/pam_web3/server.key"
+secret_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 [auth]
 mode = "nft"
@@ -334,7 +316,7 @@ wallets_path = "/etc/pam_web3/wallets"
         let config_str = r#"
 [machine]
 id = "my-server"
-private_key_file = "/etc/pam_web3/server.key"
+secret_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 [auth]
 mode = "nft"

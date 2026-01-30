@@ -1,8 +1,13 @@
 //! Blockchain verification client
 //!
-//! Connects to a local web3-auth-svc daemon via Unix socket to verify
+//! Connects to a local web3-auth-svc daemon via Unix socket to query
 //! NFT ownership. The daemon handles the actual RPC communication and
 //! supports multiple backends (JSON-RPC, Etherscan, etc.)
+//!
+//! Authentication model (v0.4.0+):
+//! - No server-side decryption needed
+//! - PAM queries blockchain for wallet's NFT token IDs
+//! - Token IDs are matched against GECOS entries in /etc/passwd
 
 use crate::config::BlockchainConfig;
 use serde::{Deserialize, Serialize};
@@ -28,15 +33,11 @@ pub enum BlockchainError {
     ServiceError(String),
 }
 
-/// Request to verify NFT access
+/// Request to get NFT token IDs for a wallet
 #[derive(Debug, Serialize)]
-pub struct VerifyAccessRequest {
+pub struct GetNftsRequest {
     /// Wallet address (checksummed or lowercase)
     pub wallet_address: String,
-    /// Machine's ECIES private key (hex) for decrypting metadata
-    pub machine_private_key: String,
-    /// Expected machine ID after decryption
-    pub expected_machine_id: String,
     /// NFT contract address (optional, uses config default if not set)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contract_address: Option<String>,
@@ -45,37 +46,15 @@ pub struct VerifyAccessRequest {
     pub chain_id: Option<u64>,
 }
 
-/// Response from NFT verification
+/// Response from NFT query
 #[derive(Debug, Deserialize)]
-pub struct VerifyAccessResponse {
-    /// Whether verification succeeded
+pub struct GetNftsResponse {
+    /// Whether the query succeeded
     pub success: bool,
     /// Error message if failed
     pub error: Option<String>,
-    /// Token ID that matched (if successful)
-    pub token_id: Option<String>,
-    /// Full metadata (if successful)
-    pub metadata: Option<NftMetadata>,
-}
-
-/// NFT metadata structure
-#[derive(Debug, Clone, Deserialize)]
-pub struct NftMetadata {
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub image: Option<String>,
-    pub animation_url: Option<String>,
-}
-
-/// Result of NFT verification
-#[derive(Debug)]
-pub struct NftVerificationResult {
-    /// The token ID that was verified
-    pub token_id: String,
-    /// The decrypted machine ID from the NFT
-    pub machine_id: String,
-    /// The full metadata
-    pub metadata: NftMetadata,
+    /// All token IDs owned by the wallet
+    pub token_ids: Option<Vec<String>>,
 }
 
 /// Blockchain client that communicates with local web3-auth-svc
@@ -97,34 +76,24 @@ impl BlockchainClient {
         })
     }
 
-    /// Verify that a wallet owns an NFT with access to this machine
-    pub async fn verify_nft_access(
+    /// Get all NFT token IDs owned by a wallet
+    ///
+    /// Returns a list of token IDs that the PAM module can match
+    /// against GECOS entries in /etc/passwd.
+    pub async fn get_wallet_nfts(
         &self,
         wallet_address: &alloy_primitives::Address,
-        machine_private_key: &[u8],
-        expected_machine_id: &str,
-    ) -> Result<NftVerificationResult, BlockchainError> {
-        let request = VerifyAccessRequest {
+    ) -> Result<Vec<String>, BlockchainError> {
+        let request = GetNftsRequest {
             wallet_address: format!("{}", wallet_address),
-            machine_private_key: hex::encode(machine_private_key),
-            expected_machine_id: expected_machine_id.to_string(),
             contract_address: self.contract_address.clone(),
             chain_id: self.chain_id,
         };
 
-        let response = self.send_request("verify_access", &request)?;
+        let response = self.send_request("get_nfts", &request)?;
 
         if response.success {
-            Ok(NftVerificationResult {
-                token_id: response.token_id.unwrap_or_default(),
-                machine_id: expected_machine_id.to_string(),
-                metadata: response.metadata.unwrap_or(NftMetadata {
-                    name: None,
-                    description: None,
-                    image: None,
-                    animation_url: None,
-                }),
-            })
+            Ok(response.token_ids.unwrap_or_default())
         } else {
             let error = response.error.unwrap_or_else(|| "Unknown error".to_string());
             if error.contains("not found") || error.contains("no NFT") {
@@ -140,7 +109,7 @@ impl BlockchainClient {
         &self,
         method: &str,
         params: &T,
-    ) -> Result<VerifyAccessResponse, BlockchainError> {
+    ) -> Result<GetNftsResponse, BlockchainError> {
         // Connect to Unix socket
         let mut stream = UnixStream::connect(&self.socket_path)
             .map_err(|e| BlockchainError::ConnectionFailed(e.to_string()))?;
@@ -183,9 +152,7 @@ impl BlockchainClient {
             .map_err(|e| BlockchainError::RequestFailed(e.to_string()))?;
 
         // Parse response
-        serde_json::from_slice(&response_buf).map_err(|e| {
-            BlockchainError::InvalidResponse
-        })
+        serde_json::from_slice(&response_buf).map_err(|_| BlockchainError::InvalidResponse)
     }
 }
 
@@ -195,18 +162,16 @@ mod tests {
 
     #[test]
     fn test_request_serialization() {
-        let request = VerifyAccessRequest {
+        let request = GetNftsRequest {
             wallet_address: "0x1234567890abcdef1234567890abcdef12345678".to_string(),
-            machine_private_key: "abcd".to_string(),
-            expected_machine_id: "server-01".to_string(),
             contract_address: None,
             chain_id: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("wallet_address"));
-        assert!(json.contains("server-01"));
         // Optional fields should not be present when None
         assert!(!json.contains("contract_address"));
+        assert!(!json.contains("chain_id"));
     }
 }

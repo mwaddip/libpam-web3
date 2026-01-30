@@ -10,7 +10,7 @@ mod protocol;
 use anyhow::{Context, Result};
 use backends::{etherscan, jsonrpc, BackendType, BlockchainBackend};
 use clap::Parser;
-use protocol::{MetadataResponse, Request, Response, VerifyAccessParams};
+use protocol::{GetNftsParams, Request, Response};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -100,14 +100,20 @@ impl Service {
 
     async fn handle_request(&self, request: Request) -> Response {
         match request.method.as_str() {
-            "verify_access" => self.handle_verify_access(request.params).await,
-            "health" => Response::success("ok".to_string(), None),
+            "get_nfts" => self.handle_get_nfts(request.params).await,
+            // Legacy method name for backwards compatibility
+            "verify_access" => self.handle_get_nfts(request.params).await,
+            "health" => Response::success_single("ok".to_string(), None),
             _ => Response::error(format!("unknown method: {}", request.method)),
         }
     }
 
-    async fn handle_verify_access(&self, params: serde_json::Value) -> Response {
-        let params: VerifyAccessParams = match serde_json::from_value(params) {
+    /// Get all NFT token IDs owned by a wallet
+    ///
+    /// The PAM module uses this to get token IDs, then matches against
+    /// GECOS entries in /etc/passwd. No server-side decryption needed.
+    async fn handle_get_nfts(&self, params: serde_json::Value) -> Response {
+        let params: GetNftsParams = match serde_json::from_value(params) {
             Ok(p) => p,
             Err(e) => return Response::error(format!("invalid params: {}", e)),
         };
@@ -135,85 +141,17 @@ impl Service {
             return Response::error("no NFT found for wallet");
         }
 
-        // Decode private key
-        let private_key = match hex::decode(&params.machine_private_key) {
-            Ok(k) if k.len() == 32 => k,
-            _ => return Response::error("invalid machine private key"),
-        };
+        // Return all token IDs - PAM module will match against GECOS
+        let token_ids: Vec<String> = nfts.into_iter().map(|n| n.token_id).collect();
 
-        // Check each NFT for matching machine ID
-        for nft in nfts {
-            let metadata = match self
-                .backend
-                .get_nft_metadata(&contract, &nft.token_id)
-                .await
-            {
-                Ok(m) => m,
-                Err(e) => {
-                    debug!("Failed to get metadata for token {}: {}", nft.token_id, e);
-                    continue;
-                }
-            };
+        info!(
+            "Found {} NFTs for wallet {}: {:?}",
+            token_ids.len(),
+            params.wallet_address,
+            token_ids
+        );
 
-            // Check if metadata has access data
-            let access = match &metadata.access {
-                Some(a) => a,
-                None => {
-                    debug!("Token {} has no access data", nft.token_id);
-                    continue;
-                }
-            };
-
-            // Decrypt server_encrypted
-            let encrypted = match hex::decode(access.server_encrypted.trim_start_matches("0x")) {
-                Ok(e) => e,
-                Err(_) => {
-                    debug!("Token {} has invalid encrypted data", nft.token_id);
-                    continue;
-                }
-            };
-
-            let decrypted = match ecies::decrypt(&private_key, &encrypted) {
-                Ok(d) => d,
-                Err(_) => {
-                    debug!("Token {} decryption failed", nft.token_id);
-                    continue;
-                }
-            };
-
-            let machine_id = match String::from_utf8(decrypted) {
-                Ok(s) => s,
-                Err(_) => {
-                    debug!("Token {} decrypted to invalid UTF-8", nft.token_id);
-                    continue;
-                }
-            };
-
-            // Check if machine ID matches
-            if machine_id == params.expected_machine_id {
-                info!(
-                    "Verified access for wallet {} with token {}",
-                    params.wallet_address, nft.token_id
-                );
-
-                return Response::success(
-                    nft.token_id,
-                    Some(MetadataResponse {
-                        name: metadata.name,
-                        description: metadata.description,
-                        image: metadata.image,
-                        animation_url: metadata.animation_url,
-                    }),
-                );
-            }
-
-            debug!(
-                "Token {} machine ID mismatch: {} != {}",
-                nft.token_id, machine_id, params.expected_machine_id
-            );
-        }
-
-        Response::error("no NFT found with matching machine ID")
+        Response::success_multiple(token_ids)
     }
 }
 

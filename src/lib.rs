@@ -171,21 +171,8 @@ fn authenticate_impl(handle: &PamHandle) -> Result<String, AuthError> {
     })?;
     syslog(&format!("Config loaded, mode: {:?}", config.auth.mode));
 
-    // Get the key for OTP generation based on mode
-    let secret_key = match config.auth.mode {
-        AuthMode::Wallet => config.secret_key_bytes().map_err(|_| AuthError::ConfigError)?,
-        AuthMode::Nft => {
-            #[cfg(feature = "nft")]
-            {
-                config.load_private_key().map_err(|_| AuthError::ConfigError)?
-            }
-            #[cfg(not(feature = "nft"))]
-            {
-                syslog("NFT mode not compiled in");
-                return Err(AuthError::NftModeNotCompiled);
-            }
-        }
-    };
+    // Get the secret key for OTP generation (same for both modes now)
+    let secret_key = config.secret_key_bytes().map_err(|_| AuthError::ConfigError)?;
 
     // Generate OTP
     let otp_instance = Otp::generate(config.auth.otp_length, &config.machine.id, &secret_key)
@@ -250,7 +237,7 @@ fn authenticate_impl(handle: &PamHandle) -> Result<String, AuthError> {
             #[cfg(feature = "nft")]
             {
                 syslog("Using NFT mode");
-                nft_authenticate(&config, &wallet_address, &secret_key)?
+                nft_authenticate(&config, &wallet_address)?
             }
             #[cfg(not(feature = "nft"))]
             {
@@ -265,18 +252,22 @@ fn authenticate_impl(handle: &PamHandle) -> Result<String, AuthError> {
 }
 
 /// NFT-based authentication (feature-gated)
+///
+/// Authentication model (v0.4.0+):
+/// 1. Get all NFT token IDs owned by the wallet
+/// 2. Match token IDs against GECOS entries in /etc/passwd (or LDAP)
+/// 3. No server-side decryption needed
 #[cfg(feature = "nft")]
 fn nft_authenticate(
     config: &Config,
     wallet_address: &alloy_primitives::Address,
-    private_key: &[u8],
 ) -> Result<String, AuthError> {
     let blockchain_config = config
         .blockchain
         .as_ref()
         .ok_or(AuthError::ConfigError)?;
 
-    // Create blockchain client and verify NFT ownership
+    // Create blockchain client
     let blockchain_client = blockchain::BlockchainClient::new(blockchain_config.clone())
         .map_err(|_| AuthError::BlockchainError)?;
 
@@ -286,32 +277,43 @@ fn nft_authenticate(
         .build()
         .map_err(|_| AuthError::RuntimeError)?;
 
-    let nft_result = rt
-        .block_on(blockchain_client.verify_nft_access(
-            wallet_address,
-            private_key,
-            &config.machine.id,
-        ))
+    // Get all token IDs owned by this wallet
+    let token_ids = rt
+        .block_on(blockchain_client.get_wallet_nfts(wallet_address))
         .map_err(|e| {
-            syslog(&format!("NFT verification failed: {:?}", e));
+            syslog(&format!("NFT query failed: {:?}", e));
             AuthError::NftNotFound
         })?;
 
-    syslog(&format!("NFT verified, token_id: {}", nft_result.token_id));
+    syslog(&format!("Found {} NFTs for wallet: {:?}", token_ids.len(), token_ids));
 
-    // Look up username based on configured method
-    let username = match config.auth.nft_lookup {
-        NftLookupMethod::Ldap => {
-            syslog("Using LDAP lookup");
-            nft_ldap_lookup(config, &nft_result.token_id, wallet_address)?
-        }
-        NftLookupMethod::Passwd => {
-            syslog("Using passwd lookup");
-            nft_passwd_lookup(&nft_result.token_id)?
-        }
-    };
+    // Try to find a matching token ID in GECOS entries
+    for token_id in &token_ids {
+        let username = match config.auth.nft_lookup {
+            NftLookupMethod::Ldap => {
+                syslog(&format!("Checking LDAP for token {}", token_id));
+                match nft_ldap_lookup(config, token_id, wallet_address) {
+                    Ok(u) => Some(u),
+                    Err(_) => None,
+                }
+            }
+            NftLookupMethod::Passwd => {
+                syslog(&format!("Checking passwd for token {}", token_id));
+                match nft_passwd_lookup(token_id) {
+                    Ok(u) => Some(u),
+                    Err(_) => None,
+                }
+            }
+        };
 
-    Ok(username)
+        if let Some(username) = username {
+            syslog(&format!("Matched token {} to user {}", token_id, username));
+            return Ok(username);
+        }
+    }
+
+    syslog("No matching GECOS entry found for any owned NFT");
+    Err(AuthError::NftNotFound)
 }
 
 /// Look up username via LDAP (checks revocation status)

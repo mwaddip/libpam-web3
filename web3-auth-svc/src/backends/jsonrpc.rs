@@ -159,10 +159,13 @@ impl JsonRpcBackend {
 
         let access = json.get("access").and_then(|a| {
             Some(AccessData {
-                server_encrypted: a.get("server_encrypted")?.as_str()?.to_string(),
                 user_encrypted: a
                     .get("user_encrypted")
                     .and_then(|u| u.as_str())
+                    .map(|s| s.to_string()),
+                decrypt_message: a
+                    .get("decrypt_message")
+                    .and_then(|d| d.as_str())
                     .map(|s| s.to_string()),
             })
         });

@@ -10,8 +10,10 @@ import "@openzeppelin/contracts/utils/Strings.sol";
 /**
  * @title AccessCredentialNFT
  * @notice ERC-721 NFT contract for Web3-based Linux authentication credentials
- * @dev Each NFT grants access to specific servers. The machine ID is encrypted
- *      using ECIES so only the server and the NFT holder can decrypt it.
+ * @dev Each NFT grants access to specific servers. Authentication is based on:
+ *      1. Wallet ownership (user signs challenge)
+ *      2. NFT ownership (token ID matches GECOS entry in /etc/passwd)
+ *      Connection details can be encrypted for the user in userEncrypted field.
  */
 contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
     using Strings for uint256;
@@ -21,9 +23,8 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
 
     /// @notice Access metadata for each token
     struct AccessData {
-        /// @notice Machine ID encrypted to the server's ECIES public key
-        bytes serverEncrypted;
         /// @notice Connection details encrypted with signature-derived key (AES-GCM)
+        /// Contains hostname/connection info that only the NFT holder can decrypt
         bytes userEncrypted;
         /// @notice Deterministic message for re-signing to derive decryption key
         /// Format: "libpam-web3:<checksumAddress>:<nonce>"
@@ -32,6 +33,8 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
         string description;
         /// @notice Optional image URI (IPFS or HTTPS)
         string imageUri;
+        /// @notice Per-token animation URL (base64-encoded HTML, falls back to contract-wide default if empty)
+        string animationUrlBase64;
         /// @notice Timestamp when the credential was issued
         uint256 issuedAt;
         /// @notice Optional expiration timestamp (0 = no expiration)
@@ -64,9 +67,6 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
     /// @notice Error when trying to use an expired credential
     error CredentialExpired(uint256 tokenId, uint256 expiresAt);
 
-    /// @notice Error when access data is invalid
-    error InvalidAccessData();
-
     constructor(
         string memory name,
         string memory symbol,
@@ -80,35 +80,31 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
     /**
      * @notice Mint a new access credential NFT
      * @param to Recipient address (the user who will use this credential)
-     * @param serverEncrypted Machine ID encrypted to server's ECIES public key
-     * @param userEncrypted Connection details encrypted with signature-derived key
+     * @param userEncrypted Connection details encrypted with signature-derived key (optional)
      * @param decryptMessage Deterministic message for re-signing to derive decryption key
      * @param description Human-readable description
      * @param imageUri Custom image URI (pass empty string to use default)
+     * @param animationUrlBase64 Per-token signing page HTML (base64, pass empty string for contract default)
      * @param expiresAt Expiration timestamp (pass 0 for no expiration)
      * @return tokenId The ID of the newly minted token
      */
     function mint(
         address to,
-        bytes calldata serverEncrypted,
         bytes calldata userEncrypted,
         string calldata decryptMessage,
         string calldata description,
         string calldata imageUri,
+        string calldata animationUrlBase64,
         uint256 expiresAt
     ) external onlyOwner returns (uint256 tokenId) {
-        if (serverEncrypted.length == 0) {
-            revert InvalidAccessData();
-        }
-
         tokenId = _nextTokenId++;
 
         _accessData[tokenId] = AccessData({
-            serverEncrypted: serverEncrypted,
             userEncrypted: userEncrypted,
             decryptMessage: decryptMessage,
             description: description,
             imageUri: imageUri,
+            animationUrlBase64: animationUrlBase64,
             issuedAt: block.timestamp,
             expiresAt: expiresAt
         });
@@ -121,30 +117,30 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
     /**
      * @notice Batch mint multiple credentials
      * @param recipients Array of recipient addresses
-     * @param serverEncryptedArray Array of server-encrypted machine IDs
-     * @param userEncryptedArray Array of user-encrypted connection details
+     * @param userEncryptedArray Array of user-encrypted connection details (optional per token)
      * @param decryptMessages Array of deterministic messages for decryption
      * @param descriptions Array of descriptions
      * @param imageUris Array of image URIs
+     * @param animationUrlBase64s Array of per-token signing pages (base64, empty string for contract default)
      * @param expirations Array of expiration timestamps
      * @return tokenIds Array of minted token IDs
      */
     function mintBatch(
         address[] calldata recipients,
-        bytes[] calldata serverEncryptedArray,
         bytes[] calldata userEncryptedArray,
         string[] calldata decryptMessages,
         string[] calldata descriptions,
         string[] calldata imageUris,
+        string[] calldata animationUrlBase64s,
         uint256[] calldata expirations
     ) external onlyOwner returns (uint256[] memory tokenIds) {
         uint256 length = recipients.length;
         require(
-            serverEncryptedArray.length == length &&
             userEncryptedArray.length == length &&
             decryptMessages.length == length &&
             descriptions.length == length &&
             imageUris.length == length &&
+            animationUrlBase64s.length == length &&
             expirations.length == length,
             "Array length mismatch"
         );
@@ -152,19 +148,15 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
         tokenIds = new uint256[](length);
 
         for (uint256 i = 0; i < length; i++) {
-            if (serverEncryptedArray[i].length == 0) {
-                revert InvalidAccessData();
-            }
-
             uint256 tokenId = _nextTokenId++;
             tokenIds[i] = tokenId;
 
             _accessData[tokenId] = AccessData({
-                serverEncrypted: serverEncryptedArray[i],
                 userEncrypted: userEncryptedArray[i],
                 decryptMessage: decryptMessages[i],
                 description: descriptions[i],
                 imageUri: imageUris[i],
+                animationUrlBase64: animationUrlBase64s[i],
                 issuedAt: block.timestamp,
                 expiresAt: expirations[i]
             });
@@ -176,25 +168,17 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
     }
 
     /**
-     * @notice Update the access data for an existing credential
-     * @dev Only callable by owner. Useful for rotating machine keys.
+     * @notice Update the user-encrypted data for an existing credential
+     * @dev Only callable by owner. Useful for updating connection details.
      * @param tokenId The token to update
-     * @param serverEncrypted New server-encrypted machine ID
-     * @param userEncrypted New user-encrypted machine ID
+     * @param newUserEncrypted New user-encrypted connection details
      */
-    function updateAccessData(
+    function updateUserEncrypted(
         uint256 tokenId,
-        bytes calldata serverEncrypted,
-        bytes calldata userEncrypted
+        bytes calldata newUserEncrypted
     ) external onlyOwner {
         require(_ownerOf(tokenId) != address(0), "Token does not exist");
-        if (serverEncrypted.length == 0) {
-            revert InvalidAccessData();
-        }
-
-        _accessData[tokenId].serverEncrypted = serverEncrypted;
-        _accessData[tokenId].userEncrypted = userEncrypted;
-
+        _accessData[tokenId].userEncrypted = newUserEncrypted;
         emit CredentialUpdated(tokenId);
     }
 
@@ -209,6 +193,20 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
     ) external onlyOwner {
         require(_ownerOf(tokenId) != address(0), "Token does not exist");
         _accessData[tokenId].expiresAt = newExpiration;
+        emit CredentialUpdated(tokenId);
+    }
+
+    /**
+     * @notice Update the animation URL (signing page) for an existing token
+     * @param tokenId The token to update
+     * @param newAnimationUrlBase64 New base64-encoded signing page HTML (empty string to use contract default)
+     */
+    function updateAnimationUrl(
+        uint256 tokenId,
+        string calldata newAnimationUrlBase64
+    ) external onlyOwner {
+        require(_ownerOf(tokenId) != address(0), "Token does not exist");
+        _accessData[tokenId].animationUrlBase64 = newAnimationUrlBase64;
         emit CredentialUpdated(tokenId);
     }
 
@@ -232,14 +230,12 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
     /**
      * @notice Get the access data for a token
      * @param tokenId The token ID
-     * @return serverEncrypted The server-encrypted machine ID
      * @return userEncrypted The user-encrypted connection details
      * @return decryptMessage The deterministic message for decryption
      * @return issuedAt When the credential was issued
      * @return expiresAt When the credential expires (0 = never)
      */
     function getAccessData(uint256 tokenId) external view returns (
-        bytes memory serverEncrypted,
         bytes memory userEncrypted,
         string memory decryptMessage,
         uint256 issuedAt,
@@ -248,7 +244,6 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
         require(_ownerOf(tokenId) != address(0), "Token does not exist");
         AccessData storage data = _accessData[tokenId];
         return (
-            data.serverEncrypted,
             data.userEncrypted,
             data.decryptMessage,
             data.issuedAt,
@@ -281,11 +276,14 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
             ? data.imageUri
             : _defaultImageUri;
 
+        // Use per-token animation URL, falling back to contract-wide default
+        string memory animationUrl = bytes(data.animationUrlBase64).length > 0
+            ? data.animationUrlBase64
+            : _signingPageBase64;
+
         // Build the access object
         string memory accessJson = string(abi.encodePacked(
-            '{"server_encrypted":"0x',
-            _bytesToHex(data.serverEncrypted),
-            '","user_encrypted":"0x',
+            '{"user_encrypted":"0x',
             _bytesToHex(data.userEncrypted),
             '","decrypt_message":"',
             data.decryptMessage,
@@ -307,7 +305,7 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
             '{"name":"Access Credential #', tokenId.toString(),
             '","description":"', data.description,
             '","image":"', imageUri,
-            '","animation_url":"data:text/html;base64,', _signingPageBase64,
+            '","animation_url":"data:text/html;base64,', animationUrl,
             '","attributes":', attributes,
             ',"access":', accessJson,
             '}'

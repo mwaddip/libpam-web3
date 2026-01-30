@@ -10,8 +10,7 @@ contract AccessCredentialNFTTest is Test {
     address public user1;
     address public user2;
 
-    // Sample encrypted data (in real usage, these would be ECIES ciphertexts)
-    bytes public sampleServerEncrypted = hex"04abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+    // Sample encrypted data (in real usage, this would be AES-GCM ciphertext)
     bytes public sampleUserEncrypted = hex"04fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
     string public sampleDecryptMessage = "libpam-web3:0x1234567890abcdef1234567890abcdef12345678:12345";
 
@@ -52,10 +51,10 @@ contract AccessCredentialNFTTest is Test {
 
         uint256 tokenId = nft.mint(
             user1,
-            sampleServerEncrypted,
             sampleUserEncrypted,
             sampleDecryptMessage,
             "Test Server Access",
+            "",
             "",
             0
         );
@@ -70,10 +69,10 @@ contract AccessCredentialNFTTest is Test {
 
         uint256 tokenId = nft.mint(
             user1,
-            sampleServerEncrypted,
             sampleUserEncrypted,
             sampleDecryptMessage,
             "Temporary Access",
+            "",
             "",
             expiresAt
         );
@@ -91,27 +90,29 @@ contract AccessCredentialNFTTest is Test {
 
         nft.mint(
             user1,
-            sampleServerEncrypted,
             sampleUserEncrypted,
             sampleDecryptMessage,
             "Test",
+            "",
             "",
             0
         );
     }
 
-    function testMintInvalidAccessData() public {
-        vm.expectRevert(AccessCredentialNFT.InvalidAccessData.selector);
-
-        nft.mint(
+    function testMintWithEmptyUserEncrypted() public {
+        // Empty userEncrypted is allowed (it's optional)
+        uint256 tokenId = nft.mint(
             user1,
-            "", // Empty server encrypted data
-            sampleUserEncrypted,
+            "", // Empty user encrypted data is fine
             sampleDecryptMessage,
             "Test",
             "",
+            "",
             0
         );
+
+        assertEq(tokenId, 0);
+        assertEq(nft.ownerOf(tokenId), user1);
     }
 
     function testBatchMint() public {
@@ -119,11 +120,6 @@ contract AccessCredentialNFTTest is Test {
         recipients[0] = user1;
         recipients[1] = user2;
         recipients[2] = user1;
-
-        bytes[] memory serverEncryptedArray = new bytes[](3);
-        serverEncryptedArray[0] = sampleServerEncrypted;
-        serverEncryptedArray[1] = sampleServerEncrypted;
-        serverEncryptedArray[2] = sampleServerEncrypted;
 
         bytes[] memory userEncryptedArray = new bytes[](3);
         userEncryptedArray[0] = sampleUserEncrypted;
@@ -145,6 +141,11 @@ contract AccessCredentialNFTTest is Test {
         imageUris[1] = "";
         imageUris[2] = "";
 
+        string[] memory animationUrls = new string[](3);
+        animationUrls[0] = "";
+        animationUrls[1] = "";
+        animationUrls[2] = "";
+
         uint256[] memory expirations = new uint256[](3);
         expirations[0] = 0;
         expirations[1] = 0;
@@ -152,11 +153,11 @@ contract AccessCredentialNFTTest is Test {
 
         uint256[] memory tokenIds = nft.mintBatch(
             recipients,
-            serverEncryptedArray,
             userEncryptedArray,
             decryptMessages,
             descriptions,
             imageUris,
+            animationUrls,
             expirations
         );
 
@@ -171,61 +172,57 @@ contract AccessCredentialNFTTest is Test {
     function testGetAccessData() public {
         uint256 tokenId = nft.mint(
             user1,
-            sampleServerEncrypted,
             sampleUserEncrypted,
             sampleDecryptMessage,
             "Test Server",
+            "",
             "",
             0
         );
 
         (
-            bytes memory serverEncrypted,
             bytes memory userEncrypted,
             string memory decryptMessage,
             uint256 issuedAt,
             uint256 expiresAt
         ) = nft.getAccessData(tokenId);
 
-        assertEq(serverEncrypted, sampleServerEncrypted);
         assertEq(userEncrypted, sampleUserEncrypted);
         assertEq(decryptMessage, sampleDecryptMessage);
         assertEq(issuedAt, block.timestamp);
         assertEq(expiresAt, 0);
     }
 
-    function testUpdateAccessData() public {
+    function testUpdateUserEncrypted() public {
         uint256 tokenId = nft.mint(
             user1,
-            sampleServerEncrypted,
             sampleUserEncrypted,
             sampleDecryptMessage,
             "Test Server",
             "",
+            "",
             0
         );
 
-        bytes memory newServerEncrypted = hex"041111111111111111111111111111111111111111111111111111111111111111";
         bytes memory newUserEncrypted = hex"042222222222222222222222222222222222222222222222222222222222222222";
 
         vm.expectEmit(true, false, false, false);
         emit CredentialUpdated(tokenId);
 
-        nft.updateAccessData(tokenId, newServerEncrypted, newUserEncrypted);
+        nft.updateUserEncrypted(tokenId, newUserEncrypted);
 
-        (bytes memory serverEncrypted, bytes memory userEncrypted, , , ) = nft.getAccessData(tokenId);
+        (bytes memory userEncrypted, , , ) = nft.getAccessData(tokenId);
 
-        assertEq(serverEncrypted, newServerEncrypted);
         assertEq(userEncrypted, newUserEncrypted);
     }
 
     function testUpdateExpiration() public {
         uint256 tokenId = nft.mint(
             user1,
-            sampleServerEncrypted,
             sampleUserEncrypted,
             sampleDecryptMessage,
             "Test Server",
+            "",
             "",
             0
         );
@@ -233,18 +230,18 @@ contract AccessCredentialNFTTest is Test {
         uint256 newExpiration = block.timestamp + 7 days;
         nft.updateExpiration(tokenId, newExpiration);
 
-        (, , , , uint256 expiresAt) = nft.getAccessData(tokenId);
+        (, , , uint256 expiresAt) = nft.getAccessData(tokenId);
         assertEq(expiresAt, newExpiration);
     }
 
     function testTokenURI() public {
         uint256 tokenId = nft.mint(
             user1,
-            sampleServerEncrypted,
             sampleUserEncrypted,
             sampleDecryptMessage,
             "Production Server Access",
             "ipfs://QmCustomImage",
+            "",
             0
         );
 
@@ -258,11 +255,11 @@ contract AccessCredentialNFTTest is Test {
     function testTokenURIWithDefaultImage() public {
         uint256 tokenId = nft.mint(
             user1,
-            sampleServerEncrypted,
             sampleUserEncrypted,
             sampleDecryptMessage,
             "Test Server",
             "", // No custom image
+            "", // No custom animation URL
             0
         );
 
@@ -272,10 +269,10 @@ contract AccessCredentialNFTTest is Test {
 
     function testEnumerable() public {
         // Mint several tokens to user1
-        nft.mint(user1, sampleServerEncrypted, sampleUserEncrypted, sampleDecryptMessage, "Server 1", "", 0);
-        nft.mint(user1, sampleServerEncrypted, sampleUserEncrypted, sampleDecryptMessage, "Server 2", "", 0);
-        nft.mint(user2, sampleServerEncrypted, sampleUserEncrypted, sampleDecryptMessage, "Server 3", "", 0);
-        nft.mint(user1, sampleServerEncrypted, sampleUserEncrypted, sampleDecryptMessage, "Server 4", "", 0);
+        nft.mint(user1, sampleUserEncrypted, sampleDecryptMessage, "Server 1", "", "", 0);
+        nft.mint(user1, sampleUserEncrypted, sampleDecryptMessage, "Server 2", "", "", 0);
+        nft.mint(user2, sampleUserEncrypted, sampleDecryptMessage, "Server 3", "", "", 0);
+        nft.mint(user1, sampleUserEncrypted, sampleDecryptMessage, "Server 4", "", "", 0);
 
         assertEq(nft.totalSupply(), 4);
         assertEq(nft.balanceOf(user1), 3);
@@ -291,10 +288,10 @@ contract AccessCredentialNFTTest is Test {
     function testTransfer() public {
         uint256 tokenId = nft.mint(
             user1,
-            sampleServerEncrypted,
             sampleUserEncrypted,
             sampleDecryptMessage,
             "Test Server",
+            "",
             "",
             0
         );
@@ -317,6 +314,126 @@ contract AccessCredentialNFTTest is Test {
         string memory newUri = "ipfs://QmNewDefaultImage";
         nft.setDefaultImageUri(newUri);
         // Verify by minting and checking URI contains new default
+    }
+
+    function testPerTokenAnimationUrl() public {
+        // Use a different signing page for this specific token (must be longer than default which is 88 chars)
+        string memory customSigningPage = "PCFET0NUWVBFIGh0bWw+PGh0bWw+PGhlYWQ+PHRpdGxlPkN1c3RvbSBTaWduaW5nIFBhZ2U8L3RpdGxlPjwvaGVhZD48Ym9keT48aDE+Q3VzdG9tIFBhZ2UgV2l0aCBNdWNoIE1vcmUgQ29udGVudDwvaDE+PC9ib2R5PjwvaHRtbD4=";
+
+        // First mint with empty (uses default)
+        uint256 tokenIdDefault = nft.mint(
+            user1,
+            sampleUserEncrypted,
+            sampleDecryptMessage,
+            "Test Server Default",
+            "",
+            "", // Empty = use default
+            0
+        );
+
+        // Then mint with custom animation URL
+        uint256 tokenIdCustom = nft.mint(
+            user1,
+            sampleUserEncrypted,
+            sampleDecryptMessage,
+            "Test Server Custom",
+            "",
+            customSigningPage, // Per-token animation URL
+            0
+        );
+
+        string memory uriDefault = nft.tokenURI(tokenIdDefault);
+        string memory uriCustom = nft.tokenURI(tokenIdCustom);
+
+        // Both URIs should be valid
+        assertTrue(bytes(uriDefault).length > 0);
+        assertTrue(bytes(uriCustom).length > 0);
+
+        // The custom one should be longer since it has a longer animation URL
+        assertTrue(bytes(uriCustom).length > bytes(uriDefault).length);
+    }
+
+    function testAnimationUrlFallbackToDefault() public {
+        // Mint with empty animation URL to use contract default
+        uint256 tokenId = nft.mint(
+            user1,
+            sampleUserEncrypted,
+            sampleDecryptMessage,
+            "Test Server",
+            "",
+            "", // Empty = use contract default
+            0
+        );
+
+        string memory uri = nft.tokenURI(tokenId);
+        assertTrue(bytes(uri).length > 0);
+        assertTrue(_startsWith(uri, "data:application/json;base64,"));
+    }
+
+    function testUpdateAnimationUrl() public {
+        uint256 tokenId = nft.mint(
+            user1,
+            sampleUserEncrypted,
+            sampleDecryptMessage,
+            "Test Server",
+            "",
+            "",
+            0
+        );
+
+        string memory uriBefore = nft.tokenURI(tokenId);
+
+        // Update to a custom animation URL (must be longer than default)
+        string memory customSigningPage = "PCFET0NUWVBFIGh0bWw+PGh0bWw+PGhlYWQ+PHRpdGxlPlVwZGF0ZWQgU2lnbmluZyBQYWdlPC90aXRsZT48L2hlYWQ+PGJvZHk+PGgxPlVwZGF0ZWQgUGFnZSBXaXRoIE11Y2ggTW9yZSBDb250ZW50PC9oMT48L2JvZHk+PC9odG1sPg==";
+
+        vm.expectEmit(true, false, false, false);
+        emit CredentialUpdated(tokenId);
+
+        nft.updateAnimationUrl(tokenId, customSigningPage);
+
+        string memory uriAfter = nft.tokenURI(tokenId);
+
+        assertTrue(bytes(uriAfter).length > bytes(uriBefore).length);
+    }
+
+    function testUpdateAnimationUrlToEmpty() public {
+        string memory customSigningPage = "PCFET0NUWVBFIGh0bWw+PGh0bWw+PGhlYWQ+PHRpdGxlPkN1c3RvbSBTaWduaW5nIFBhZ2U8L3RpdGxlPjwvaGVhZD48Ym9keT48aDE+Q3VzdG9tIFBhZ2UgV2l0aCBNdWNoIE1vcmUgQ29udGVudDwvaDE+PC9ib2R5PjwvaHRtbD4=";
+
+        uint256 tokenId = nft.mint(
+            user1,
+            sampleUserEncrypted,
+            sampleDecryptMessage,
+            "Test Server",
+            "",
+            customSigningPage,
+            0
+        );
+
+        string memory uriBefore = nft.tokenURI(tokenId);
+
+        // Update to empty (revert to contract default)
+        nft.updateAnimationUrl(tokenId, "");
+
+        string memory uriAfter = nft.tokenURI(tokenId);
+
+        assertTrue(bytes(uriAfter).length < bytes(uriBefore).length);
+    }
+
+    function testUpdateAnimationUrlOnlyOwner() public {
+        uint256 tokenId = nft.mint(
+            user1,
+            sampleUserEncrypted,
+            sampleDecryptMessage,
+            "Test Server",
+            "",
+            "",
+            0
+        );
+
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", user1));
+
+        nft.updateAnimationUrl(tokenId, "PGh0bWw+PC9odG1sPg==");
     }
 
     // Helper function to check string prefix
