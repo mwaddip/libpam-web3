@@ -1,13 +1,13 @@
 //! CLI tool for pam_web3 administration
 //!
 //! Provides utilities for:
-//! - Generating machine keypairs (secp256k1 ECIES)
-//! - Encrypting machine IDs for NFT minting
-//!   - Server field: secp256k1 ECIES
-//!   - User field: AES-256-GCM with signature-derived key
-//! - Symmetric encryption/decryption with signature-derived keys
+//! - Symmetric encryption/decryption with signature-derived keys (for user_encrypted field)
+//! - Generating keypairs for testing
 //! - Deriving public keys from private keys
 //! - Getting x25519 encryption public key for wallet (legacy)
+//!
+//! Note: Server-side encryption (serverEncrypted) was removed in v0.4.0.
+//! Authentication now uses ownership-based verification (wallet + NFT token ID).
 
 use pam_web3::ecies;
 use std::env;
@@ -24,7 +24,6 @@ fn main() {
 
     match args[1].as_str() {
         "generate-keypair" => generate_keypair(&args[2..]),
-        "encrypt" => encrypt_machine_id(&args[2..]),
         "encrypt-symmetric" => encrypt_symmetric(&args[2..]),
         "decrypt-symmetric" => decrypt_symmetric(&args[2..]),
         "derive-pubkey" => derive_public_key(&args[2..]),
@@ -47,8 +46,7 @@ USAGE:
     pam_web3_tool <COMMAND> [OPTIONS]
 
 COMMANDS:
-    generate-keypair        Generate a new secp256k1 ECIES keypair for a machine
-    encrypt                 Encrypt a machine ID for NFT metadata (server field)
+    generate-keypair        Generate a new secp256k1 keypair (for testing)
     encrypt-symmetric       Encrypt data with signature-derived AES-256-GCM key
     decrypt-symmetric       Decrypt data with signature-derived AES-256-GCM key
     derive-pubkey           Derive secp256k1 public key from private key
@@ -56,28 +54,28 @@ COMMANDS:
     decrypt                 Decrypt encrypted data (for testing)
     help                    Print this help message
 
-ENCRYPTION SCHEMES:
-    Server field (server_encrypted):
-        secp256k1 ECIES - decrypted by server using its private key
+AUTHENTICATION MODEL (v0.4.0+):
+    Server-side decryption (serverEncrypted) has been removed.
+    Authentication now uses:
+    1. Wallet ownership (user signs OTP challenge)
+    2. NFT ownership (token ID matches GECOS entry in /etc/passwd)
 
-    User field (user_encrypted):
-        AES-256-GCM with signature-derived key
-        Key = keccak256(user_signature)
-        User signs decrypt_message → same signature → same key → decrypt
+    The user_encrypted field is OPTIONAL and allows users to store
+    connection details that only they can decrypt.
+
+ENCRYPTION SCHEME (user_encrypted):
+    AES-256-GCM with signature-derived key
+    Key = keccak256(user_signature)
+    User signs decrypt_message → same signature → same key → decrypt
 
 EXAMPLES:
-    # Generate a new keypair for a machine
-    pam_web3_tool generate-keypair --output /etc/pam_web3/server.key
-
-    # Encrypt server field (machine ID for server decryption)
-    pam_web3_tool encrypt \
-        --machine-id "server-prod-01" \
-        --server-pubkey <secp256k1_pubkey_hex>
+    # Generate a new keypair (for testing)
+    pam_web3_tool generate-keypair
 
     # Encrypt user field with signature-derived key
     pam_web3_tool encrypt-symmetric \
         --signature <user_signature_hex> \
-        --plaintext '{{"ip":"192.168.1.100","machine_id":"server-01","port":22}}'
+        --plaintext '{{"hostname":"server.example.com","port":22}}'
 
     # Decrypt user field with signature-derived key
     pam_web3_tool decrypt-symmetric \
@@ -85,12 +83,7 @@ EXAMPLES:
         --ciphertext <hex>
 
     # Derive secp256k1 public key from private key
-    pam_web3_tool derive-pubkey --private-key-file /etc/pam_web3/server.key
-
-    # Decrypt server-encrypted data (for testing)
-    pam_web3_tool decrypt --scheme secp256k1 \
-        --private-key-file /etc/pam_web3/server.key \
-        --ciphertext <hex>
+    pam_web3_tool derive-pubkey --private-key <hex>
 "#
     );
 }
@@ -142,107 +135,6 @@ fn generate_keypair(args: &[String]) {
 
     if show_pubkey || output_path.is_some() {
         println!("Public key (hex):  {}", public_key_hex);
-    }
-}
-
-fn encrypt_machine_id(args: &[String]) {
-    let mut machine_id: Option<String> = None;
-    let mut server_pubkey: Option<String> = None;
-    let mut user_pubkey: Option<String> = None;
-    let mut json_output = false;
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--machine-id" | "-m" => {
-                i += 1;
-                if i < args.len() {
-                    machine_id = Some(args[i].clone());
-                }
-            }
-            "--pubkey" | "--server-pubkey" => {
-                i += 1;
-                if i < args.len() {
-                    server_pubkey = Some(args[i].clone());
-                }
-            }
-            "--user-pubkey" => {
-                i += 1;
-                if i < args.len() {
-                    user_pubkey = Some(args[i].clone());
-                }
-            }
-            "--json" => {
-                json_output = true;
-            }
-            _ => {
-                eprintln!("Unknown option: {}", args[i]);
-                process::exit(1);
-            }
-        }
-        i += 1;
-    }
-
-    let machine_id = machine_id.expect("--machine-id is required");
-    let server_pubkey = server_pubkey.expect("--pubkey or --server-pubkey is required");
-
-    // Encrypt for server using secp256k1 ECIES
-    let server_pubkey_bytes = hex::decode(&server_pubkey).expect("Invalid server public key hex");
-    let server_encrypted =
-        ecies::encrypt(&server_pubkey_bytes, &machine_id).expect("Failed to encrypt for server");
-
-    if !json_output {
-        println!("Server encrypted (secp256k1 ECIES):");
-        println!("{}", server_encrypted);
-        println!();
-    }
-
-    // Encrypt for user using x25519 (eth_decrypt compatible) if pubkey provided
-    let user_encrypted = if let Some(ref user_pubkey) = user_pubkey {
-        let user_pubkey_bytes = hex::decode(user_pubkey).expect("Invalid user public key hex");
-
-        if user_pubkey_bytes.len() != 32 {
-            eprintln!("User public key must be 32 bytes (x25519). Get it via:");
-            eprintln!("  - MetaMask: eth_getEncryptionPublicKey");
-            eprintln!("  - This tool: pam_web3_tool wallet-encryption-key --private-key <hex>");
-            process::exit(1);
-        }
-
-        let encrypted = ecies::encrypt_for_eth_decrypt(&user_pubkey_bytes, &machine_id)
-            .expect("Failed to encrypt for user");
-
-        if !json_output {
-            println!("User encrypted (x25519-xsalsa20-poly1305, eth_decrypt compatible):");
-            println!("{}", encrypted);
-            println!();
-        }
-
-        Some(encrypted)
-    } else {
-        if !json_output {
-            println!("User encrypted: (not provided, use --user-pubkey to encrypt for user)");
-            println!();
-        }
-        None
-    };
-
-    // Output as JSON for easy copying
-    if json_output {
-        println!(
-            r#"{{"server_encrypted":"{}","user_encrypted":"{}"}}"#,
-            server_encrypted,
-            user_encrypted.unwrap_or_default()
-        );
-    } else {
-        println!("JSON for NFT metadata access field:");
-        println!(
-            r#"{{
-  "server_encrypted": "{}",
-  "user_encrypted": "{}"
-}}"#,
-            server_encrypted,
-            user_encrypted.unwrap_or_default()
-        );
     }
 }
 
@@ -333,7 +225,6 @@ fn get_wallet_encryption_key(args: &[String]) {
 
     println!("x25519 encryption public key (hex): {}", x25519_pubkey);
     println!();
-    println!("Use this key as --user-pubkey when encrypting machine IDs.");
     println!("This is equivalent to calling eth_getEncryptionPublicKey in MetaMask.");
 }
 

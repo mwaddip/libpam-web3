@@ -1,5 +1,18 @@
 # libpam-web3
 
+## Environment Variables
+
+**Essential environment variables are stored in `~/projects/sharedenv/`**
+
+- `blockhost.env` - Deployer keys, contract addresses, RPC endpoints
+
+Load before deploying or interacting with contracts:
+```bash
+source ~/projects/sharedenv/blockhost.env
+```
+
+---
+
 ## Project Overview
 
 PAM module for Linux authentication via Ethereum wallet signatures. Two modes:
@@ -40,8 +53,9 @@ cargo build --release --features nft  # Full NFT support
 |------|---------|
 | `/etc/pam_web3/config.toml` | Runtime configuration |
 | `/etc/pam_web3/wallets` | Wallet→username mappings (wallet mode) |
-| `/etc/pam_web3/server.key` | Machine ECIES private key (NFT mode) |
 | `/lib/security/pam_web3.so` | Installed PAM module |
+
+Note: `server.key` is NOT required for NFT mode (v0.4.0+). Authentication uses ownership + GECOS matching.
 
 ## Config Format
 
@@ -49,7 +63,6 @@ cargo build --release --features nft  # Full NFT support
 [machine]
 id = "server-name"
 secret_key = "0x..."      # Wallet mode: HMAC key
-private_key_file = "..."  # NFT mode: ECIES key path
 
 [auth]
 mode = "wallet"           # or "nft"
@@ -81,8 +94,11 @@ bind_password_file = "..."
 5. PAM recovers wallet address via ecrecover
 6. Mode-specific lookup:
    - Wallet: Check wallets file
-   - NFT: Query blockchain via web3-auth-svc → Check LDAP
+   - NFT: Query blockchain for wallet's NFT token IDs → Match against GECOS (`nft=TOKEN_ID`)
 7. Return username to PAM
+
+**NFT Mode (v0.4.0+)**: No server private key needed. Authentication is purely ownership-based:
+- Wallet owns NFT → Token ID matches GECOS entry → Access granted
 
 ## Feature Flags
 
@@ -127,3 +143,62 @@ git diff --cached --name-only | xargs grep -l -E '(0x[a-fA-F0-9]{64}|password|se
 - `.env`, `.env.*`
 - `config.toml` with real credentials
 - `ldap.secret`, `server.key`
+
+---
+
+## Subproject Documentation
+
+Each major component has its own documentation:
+
+| Directory | Documentation | Purpose |
+|-----------|---------------|---------|
+| `contracts/` | `CLAUDE.md`, `PROJECT.yaml` | Smart contract specs, encryption flows |
+| `web3-auth-svc/` | (see directory) | Blockchain query daemon |
+| `signing-page/` | (see directory) | Browser signing UI |
+
+### PROJECT.yaml Maintenance (CRITICAL)
+
+**You MUST maintain `PROJECT.yaml` files when modifying code.**
+
+These files are machine-readable specifications that:
+- Document architecture, flows, and privacy properties
+- Enable future Claude sessions to understand the codebase
+- Track breaking changes and migration paths
+
+**When to update PROJECT.yaml:**
+- Adding/modifying functions or data structures
+- Changing encryption or authentication flows
+- Adding features or making breaking changes
+- Updating dependencies or build processes
+
+**The `contracts/PROJECT.yaml` is especially important** as it documents:
+- Privacy model (hostnames NEVER in plaintext on-chain)
+- Encryption flows (ECIES for server, AES-GCM for user)
+- Complete NFT minting and authentication flows
+- Contract interface and function signatures
+
+---
+
+## Authentication Model (NFT Mode v0.4.0+)
+
+**Simple ownership-based authentication. No server-side decryption needed.**
+
+```
+Authentication Flow:
+  1. User signs OTP challenge → proves wallet ownership
+  2. PAM queries blockchain → gets wallet's NFT token IDs
+  3. PAM checks /etc/passwd GECOS → finds entry with nft=TOKEN_ID
+  4. Match found → user authenticated as that Linux user
+```
+
+**Server requirements (minimal):**
+- Contract address (public)
+- RPC endpoint (public)
+- GECOS entries mapping token IDs to Linux users
+
+**No server private keys needed.** The `serverEncrypted` field was removed in v0.4.0.
+
+**Optional `userEncrypted` field:**
+- Stores connection details encrypted with signature-derived key (AES-GCM)
+- Only the NFT holder can decrypt by re-signing the `decryptMessage`
+- Purely for user convenience - authentication works without it

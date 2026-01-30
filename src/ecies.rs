@@ -1,16 +1,19 @@
-//! Encryption modules for machine ID protection
+//! Encryption modules for user-side data protection
 //!
-//! Supports three encryption schemes:
-//! - **secp256k1 ECIES**: For server-side decryption (server_encrypted field)
+//! Supports encryption schemes:
+//! - **AES-256-GCM with signature-derived key**: Primary scheme for user_encrypted field
 //! - **x25519-xsalsa20-poly1305**: For user wallet decryption via eth_decrypt (legacy)
-//! - **AES-256-GCM with signature-derived key**: For user decryption (user_encrypted field)
+//! - **secp256k1 ECIES**: Available for testing/utilities (not used for authentication)
 //!
-//! The signature-derived encryption scheme works by:
+//! The signature-derived encryption scheme (primary) works by:
 //! 1. User signs a deterministic message with their wallet
 //! 2. Key is derived: K = keccak256(signature)
 //! 3. Data is encrypted/decrypted with AES-256-GCM using key K
 //!
 //! This allows decryption without exposing the user's private key.
+//!
+//! Note: Server-side decryption (serverEncrypted) was removed in v0.4.0.
+//! Authentication now uses ownership-based verification (wallet + NFT token ID).
 
 use aes_gcm::{
     aead::{Aead as AesAead, KeyInit},
@@ -51,16 +54,16 @@ pub enum EciesError {
 /// Encryption scheme identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncryptionScheme {
-    /// secp256k1 ECIES - for server decryption
+    /// secp256k1 ECIES - available for utilities (not used for auth)
     Secp256k1Ecies,
     /// x25519-xsalsa20-poly1305 - for wallet eth_decrypt (legacy)
     X25519XSalsa20Poly1305,
-    /// AES-256-GCM with signature-derived key - for user decryption
+    /// AES-256-GCM with signature-derived key - primary scheme for user_encrypted
     SignatureDerivedAesGcm,
 }
 
 // ============================================================================
-// secp256k1 ECIES (for server_encrypted)
+// secp256k1 ECIES (available for utilities, not used for auth in v0.4.0+)
 // ============================================================================
 
 /// Decrypt data using secp256k1 ECIES with the machine's private key

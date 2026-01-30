@@ -348,7 +348,7 @@ smart_contract:
         --rpc-url $RPC_URL --private-key $DEPLOYER_KEY \
         --constructor-args "Access Credentials" "ACCESS" "$SIGNING_PAGE_BASE64" "$IMAGE_URI"
   minting:
-    function: "mint(address,bytes,bytes,string,string,string,uint256)"
+    function: "mint(address,bytes,bytes,string,string,string,string,uint256)"
     parameters:
       - to: Recipient wallet address
       - serverEncryptedMachineId: ECIES encrypted machine ID
@@ -356,6 +356,7 @@ smart_contract:
       - signingSecret: Optional signing secret (empty string for none)
       - name: Token name/description
       - image: Image URI (ipfs:// or data:)
+      - animationUrlBase64: Signing page HTML (base64, no data: prefix). Empty string for contract default.
       - expiresAt: Unix timestamp (0 for no expiry)
 
 security:
@@ -407,3 +408,24 @@ dependencies:
     - Rust toolchain (rustc, cargo)
     - OpenSSL development headers
     - Foundry (for contract deployment)
+
+changelog:
+  - version: "0.3.0"
+    date: "2026-01-30"
+    breaking_changes:
+      - component: smart_contract
+        function: "mint()"
+        change: |
+          Added animationUrlBase64 parameter (8th parameter).
+          Old: mint(address,bytes,bytes,string,string,string,uint256)
+          New: mint(address,bytes,bytes,string,string,string,string,uint256)
+          Migration: Pass empty string "" as 7th parameter to use contract-wide default.
+      - component: smart_contract
+        function: "mintBatch()"
+        change: |
+          Added animationUrlBase64s array parameter (8th parameter).
+          Migration: Add empty string array for 7th parameter to use defaults.
+    new_features:
+      - Per-token animation_url storage (signing page per NFT)
+      - updateAnimationUrl() function for existing tokens
+      - Fallback to contract-wide _signingPageBase64 when per-token value empty

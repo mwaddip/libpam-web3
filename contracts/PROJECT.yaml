@@ -1,0 +1,351 @@
+# AccessCredentialNFT Smart Contract
+# Machine-readable project specification for Claude sessions
+# IMPORTANT: Keep this file updated when making changes to the contract
+
+project:
+  name: AccessCredentialNFT
+  type: Solidity Smart Contract
+  standard: ERC-721
+  path: src/AccessCredentialNFT.sol
+  test_path: test/AccessCredentialNFT.t.sol
+  framework: Foundry
+
+purpose: |
+  NFT-based access credentials for Linux server authentication.
+  Each NFT represents access to a specific server. Authentication is based on:
+  1. Wallet ownership (user signs OTP challenge)
+  2. NFT token ID matching GECOS entry in /etc/passwd (nft=TOKEN_ID)
+  No server-side private keys required for verification.
+
+# =============================================================================
+# AUTHENTICATION MODEL
+# =============================================================================
+authentication:
+  summary: |
+    Simple ownership-based authentication. No server-side decryption needed.
+    Server verifies: wallet owns NFT → token ID matches GECOS → grant access.
+
+  requirements:
+    user_side:
+      - Wallet with private key
+      - NFT from the contract
+    server_side:
+      - Contract address (public)
+      - RPC endpoint (public)
+      - GECOS entry mapping token ID to Linux user
+
+  flow:
+    - step: 1
+      action: User initiates SSH connection
+    - step: 2
+      action: PAM module generates OTP challenge
+    - step: 3
+      action: User signs OTP with wallet
+    - step: 4
+      action: PAM recovers wallet address from signature
+    - step: 5
+      action: PAM queries blockchain for wallet's NFT token IDs
+    - step: 6
+      action: PAM checks /etc/passwd GECOS for matching nft=TOKEN_ID
+    - step: 7
+      action: If match found, user authenticated as that Linux user
+
+  no_server_key_needed: |
+    Unlike previous design, servers do NOT need private keys.
+    The serverEncrypted field has been removed entirely.
+    Authentication relies solely on NFT ownership + GECOS mapping.
+
+# =============================================================================
+# OPTIONAL USER ENCRYPTION
+# =============================================================================
+user_encryption:
+  purpose: |
+    The userEncrypted field is OPTIONAL and exists purely for user convenience.
+    It allows storing connection details (hostname, etc.) that only the NFT
+    holder can decrypt by re-signing the deterministic decryptMessage.
+
+  fields:
+    userEncrypted:
+      type: bytes
+      optional: true
+      algorithm: AES-GCM with signature-derived key
+      contains: Hostname, connection details, or any user-specific data
+      encrypted_by: Client-side JavaScript at signup
+      decrypted_by: User re-signing decryptMessage to derive key
+
+    decryptMessage:
+      type: string
+      format: "libpam-web3:<checksumAddress>:<nonce>"
+      purpose: Deterministic message user signs to derive decryption key
+
+  note: |
+    If userEncrypted is empty, the NFT still works for authentication.
+    The encryption is purely for the user to store/retrieve their own data.
+
+# =============================================================================
+# CONTRACT INTERFACE
+# =============================================================================
+contract:
+  name: AccessCredentialNFT
+  inherits:
+    - ERC721
+    - ERC721Enumerable
+    - Ownable
+
+  structs:
+    AccessData:
+      fields:
+        - name: userEncrypted
+          type: bytes
+          description: Optional connection details encrypted for user
+
+        - name: decryptMessage
+          type: string
+          description: Deterministic message for key derivation
+          format: "libpam-web3:<checksumAddress>:<nonce>"
+
+        - name: description
+          type: string
+          description: Human-readable description for NFT metadata
+
+        - name: imageUri
+          type: string
+          description: Image URI (ipfs:// or data:), empty for default
+
+        - name: animationUrlBase64
+          type: string
+          description: Per-token signing page HTML (base64), empty for contract default
+
+        - name: issuedAt
+          type: uint256
+          description: Block timestamp when minted
+
+        - name: expiresAt
+          type: uint256
+          description: Expiration timestamp, 0 for no expiration
+
+  functions:
+    mint:
+      visibility: external
+      modifier: onlyOwner
+      signature: "mint(address,bytes,string,string,string,string,uint256)"
+      parameters:
+        - name: to
+          type: address
+          description: Recipient wallet address
+
+        - name: userEncrypted
+          type: bytes
+          description: Optional encrypted connection details (can be empty)
+
+        - name: decryptMessage
+          type: string
+          description: Message for key derivation
+
+        - name: description
+          type: string
+          description: NFT description
+
+        - name: imageUri
+          type: string
+          description: Image URI (empty for default)
+
+        - name: animationUrlBase64
+          type: string
+          description: Per-token signing page (empty for contract default)
+
+        - name: expiresAt
+          type: uint256
+          description: Expiration timestamp (0 for never)
+
+      returns: tokenId (uint256)
+
+    mintBatch:
+      visibility: external
+      modifier: onlyOwner
+      signature: "mintBatch(address[],bytes[],string[],string[],string[],string[],uint256[])"
+      description: Batch mint multiple NFTs in one transaction
+
+    updateUserEncrypted:
+      visibility: external
+      modifier: onlyOwner
+      description: Update userEncrypted field for a token
+
+    updateExpiration:
+      visibility: external
+      modifier: onlyOwner
+      description: Extend or set expiration for a token
+
+    updateAnimationUrl:
+      visibility: external
+      modifier: onlyOwner
+      description: Update per-token signing page
+
+    setSigningPage:
+      visibility: external
+      modifier: onlyOwner
+      description: Update contract-wide default signing page
+
+    getAccessData:
+      visibility: external
+      view: true
+      returns: [userEncrypted, decryptMessage, issuedAt, expiresAt]
+      description: Retrieve access data for a token
+
+    isExpired:
+      visibility: public
+      view: true
+      description: Check if credential has expired
+
+    tokenURI:
+      visibility: public
+      view: true
+      description: Returns base64-encoded JSON with metadata and access data
+
+  events:
+    - name: CredentialMinted
+      params: [tokenId, recipient, issuedAt, expiresAt]
+
+    - name: CredentialUpdated
+      params: [tokenId]
+
+    - name: SigningPageUpdated
+      params: []
+
+  errors:
+    - name: CredentialExpired
+      params: [tokenId, expiresAt]
+
+# =============================================================================
+# TOKEN URI STRUCTURE
+# =============================================================================
+token_uri:
+  format: "data:application/json;base64,<base64_encoded_json>"
+
+  json_structure:
+    name: "Access Credential #<tokenId>"
+    description: "<from AccessData.description>"
+    image: "<imageUri or default>"
+    animation_url: "data:text/html;base64,<signing_page>"
+    attributes:
+      - trait_type: Type
+        value: Server Access
+      - trait_type: Issued
+        display_type: date
+        value: "<issuedAt timestamp>"
+      - trait_type: Expires
+        display_type: date
+        value: "<expiresAt timestamp>"
+    access:
+      user_encrypted: "0x<hex>"
+      decrypt_message: "<decryptMessage string>"
+
+# =============================================================================
+# DEVELOPMENT
+# =============================================================================
+development:
+  build:
+    command: forge build
+    output: out/AccessCredentialNFT.sol/AccessCredentialNFT.json
+
+  test:
+    command: forge test
+    verbose: forge test -vv
+
+  deploy:
+    command: |
+      source ~/projects/sharedenv/blockhost.env
+      forge create src/AccessCredentialNFT.sol:AccessCredentialNFT \
+        --rpc-url $SEPOLIA_RPC \
+        --private-key $DEPLOYER_PRIVATE_KEY \
+        --broadcast \
+        --constructor-args "BlockHost Access" "BHAC" "$SIGNING_PAGE_BASE64" "$DEFAULT_IMAGE_URI"
+
+  constructor_args:
+    - name: Name (string)
+    - symbol: Symbol (string)
+    - signingPageBase64: Default signing page HTML (base64)
+    - defaultImageUri: Default image URI for tokens
+
+# =============================================================================
+# ARCHITECTURE
+# =============================================================================
+architecture:
+  components:
+    static_signup_page:
+      description: Offline-capable page for purchasing/minting NFTs
+      responsibilities:
+        - Prompt user to sign deterministic message
+        - Optionally encrypt connection details (userEncrypted)
+        - Call sale contract with data
+      note: SEPARATE PROJECT - not part of this repository
+
+    sale_contract:
+      description: Handles payment and calls AccessCredentialNFT.mint()
+      note: SEPARATE PROJECT - not part of this repository
+
+    access_credential_nft:
+      description: This contract - stores credentials as NFTs
+      responsibilities:
+        - Store NFT metadata and optional encrypted data
+        - Manage NFT ownership and transfers
+        - Provide tokenURI with embedded signing page
+
+    pam_module:
+      description: Linux PAM module that authenticates using NFTs
+      location: ../src/ (Rust code)
+      responsibilities:
+        - Generate OTP challenge
+        - Verify wallet signature
+        - Query blockchain for NFT ownership
+        - Match token ID to GECOS entry
+      does_not_need:
+        - Server private key
+        - Decryption of any NFT data
+
+# =============================================================================
+# CHANGELOG
+# =============================================================================
+changelog:
+  - version: "0.4.0"
+    date: "2026-01-30"
+    breaking_changes:
+      - change: Removed serverEncrypted field entirely
+        reason: Server verification via ECIES was redundant; NFT ownership + GECOS matching suffices
+        migration: Remove serverEncrypted parameter from all mint calls
+
+      - function: mint()
+        old_signature: "mint(address,bytes,bytes,string,string,string,string,uint256)"
+        new_signature: "mint(address,bytes,string,string,string,string,uint256)"
+        change: Removed serverEncrypted parameter (was 2nd param)
+
+      - function: mintBatch()
+        change: Removed serverEncryptedArray parameter
+
+      - function: updateAccessData()
+        change: Renamed to updateUserEncrypted(), now only takes userEncrypted
+
+      - function: getAccessData()
+        change: No longer returns serverEncrypted
+
+    removed:
+      - InvalidAccessData error (no longer needed)
+      - serverEncrypted from AccessData struct
+      - server_encrypted from tokenURI JSON
+
+    impact:
+      - Servers no longer need /etc/pam_web3/server.key
+      - No ECIES decryption required for authentication
+      - Simpler deployment and key management
+
+  - version: "0.3.0"
+    date: "2026-01-30"
+    changes:
+      - Added per-token animationUrlBase64 field
+      - Added updateAnimationUrl() function
+      - Fallback to contract-wide default when per-token value empty
+
+  - version: "0.2.0"
+    date: "2026-01-15"
+    changes:
+      - Initial release with dual encryption support

@@ -62,8 +62,7 @@ contract MintCredential is Script {
         address nftContract = vm.envAddress("NFT_CONTRACT");
         address recipient = vm.envAddress("RECIPIENT");
 
-        // These should be hex-encoded encrypted data
-        bytes memory serverEncrypted = vm.envBytes("SERVER_ENCRYPTED");
+        // User-encrypted connection details (optional, hex-encoded AES-GCM ciphertext)
         bytes memory userEncrypted = vm.envOr("USER_ENCRYPTED", bytes(""));
 
         // Decrypt message for signature-derived decryption
@@ -77,6 +76,7 @@ contract MintCredential is Script {
             string("SSH access credential")
         );
         string memory imageUri = vm.envOr("IMAGE_URI", string(""));
+        string memory animationUrlBase64 = vm.envOr("ANIMATION_URL_BASE64", string(""));
         uint256 expiresAt = vm.envOr("EXPIRES_AT", uint256(0));
 
         vm.startBroadcast(deployerPrivateKey);
@@ -84,11 +84,11 @@ contract MintCredential is Script {
         AccessCredentialNFT nft = AccessCredentialNFT(nftContract);
         uint256 tokenId = nft.mint(
             recipient,
-            serverEncrypted,
             userEncrypted,
             decryptMessage,
             description,
             imageUri,
+            animationUrlBase64,
             expiresAt
         );
 
