@@ -45,6 +45,10 @@ signing-page/        # Browser wallet signing UI
 ```bash
 cargo build --release                 # Wallet mode only
 cargo build --release --features nft  # Full NFT support
+
+# Debian packages (v0.4.0+)
+./packaging/build-deb.sh              # libpam-web3 (PAM module for VMs)
+./packaging/build-deb-tools.sh        # libpam-web3-tools (server tools)
 ```
 
 ## Key Files
@@ -117,6 +121,32 @@ cargo test --features nft             # Include NFT module tests
 - PAM module: `target/release/libpam_web3.so`
 - CLI tool: `target/release/pam_web3_tool` (requires --features nft)
 - Web3 service: `web3-auth-svc/target/release/web3-auth-svc`
+
+## Debian Packages (v0.4.0+)
+
+Two separate packages for different deployment targets:
+
+| Package | Install On | Contents |
+|---------|------------|----------|
+| `libpam-web3` | VMs (client machines) | PAM module, `/etc/pam_web3/config.toml` |
+| `libpam-web3-tools` | Management server | `pam_web3_tool`, `web3-auth-svc`, signing page scripts |
+
+## Signing Page Generator
+
+Generate customized signing pages for NFT minting:
+
+```bash
+cd signing-page/
+
+# Generate HTML with server pubkey and decrypt message
+./generate.sh \
+    --server-pubkey "04a1b2c3..." \
+    --decrypt-message "Decrypt BlockHost credentials"
+
+# Base64 encode for NFT animationUrlBase64 parameter
+./build.sh
+# Output: signing-page.b64
+```
 
 ---
 
