@@ -1,11 +1,11 @@
 # libpam-web3 Project Documentation
 # Machine-readable project specification for integration and automation
-# Version: 0.2.0
+# Version: 0.4.0
 
 project:
   name: libpam-web3
   description: PAM module for Linux authentication via Ethereum wallet signatures
-  version: "0.2.0"
+  version: "0.4.0"
   license: MIT
   repository: https://github.com/mwaddip/libpam-web3
   language: Rust
@@ -87,9 +87,15 @@ build:
       command: cd web3-auth-svc && cargo build --release
       output: web3-auth-svc/target/release/web3-auth-svc
 
-    deb_package:
+    deb_package_pam:
       command: ./packaging/build-deb.sh
-      output: packaging/libpam-web3_0.2.0_amd64.deb
+      output: packaging/libpam-web3_0.4.0_amd64.deb
+      description: PAM module for VMs (authentication)
+
+    deb_package_tools:
+      command: ./packaging/build-deb-tools.sh
+      output: packaging/libpam-web3-tools_0.4.0_amd64.deb
+      description: Server-side tools (minting, blockchain service)
 
     tests:
       command: cargo test --features nft
@@ -117,14 +123,9 @@ configuration:
           example: "my-server-hostname"
         secret_key:
           type: string (hex)
-          required_for: wallet mode
+          required: true
           description: HMAC key for OTP generation (32 bytes hex, 0x prefix optional)
           example: "0x0123456789abcdef..."
-        private_key_file:
-          type: path
-          required_for: nft mode
-          description: Path to ECIES private key file
-          example: "/etc/pam_web3/server.key"
 
     auth:
       required: true
@@ -320,14 +321,36 @@ cli_tools:
   pam_web3_tool:
     commands:
       generate-keypair:
-        description: Generate ECIES keypair for NFT mode
-        usage: pam_web3_tool generate-keypair --output /etc/pam_web3/server.key
+        description: Generate secp256k1 ECIES keypair
+        usage: pam_web3_tool generate-keypair --output server.key --show-pubkey
         output: Writes private key to file, prints public key to stdout
 
-      encrypt:
-        description: Encrypt machine ID for NFT minting
-        usage: pam_web3_tool encrypt --machine-id "hostname" --server-pubkey "04..."
-        output: Encrypted bytes for NFT metadata
+      encrypt-symmetric:
+        description: Encrypt data with signature-derived AES-256-GCM key
+        usage: pam_web3_tool encrypt-symmetric --signature "0x..." --plaintext '{"hostname":"..."}'
+        output: Hex-encoded ciphertext for userEncrypted field
+
+      decrypt-symmetric:
+        description: Decrypt data with signature-derived key
+        usage: pam_web3_tool decrypt-symmetric --signature "0x..." --ciphertext "..."
+        output: Decrypted plaintext
+
+      decrypt:
+        description: Decrypt ECIES-encrypted data (for transport decryption)
+        usage: pam_web3_tool decrypt --scheme secp256k1 --private-key-file server.key --ciphertext "..."
+        output: Decrypted plaintext
+
+  signing_page_generator:
+    path: signing-page/
+    scripts:
+      generate.sh:
+        description: Generate signing page with embedded config
+        usage: ./generate.sh --server-pubkey "04..." --decrypt-message "Decrypt credentials"
+        output: index.html with config values injected
+      build.sh:
+        description: Minify and base64 encode signing page
+        usage: ./build.sh
+        output: signing-page.b64 (base64 for animationUrlBase64 parameter)
 
   extract_signing_page:
     platforms:
@@ -341,6 +364,7 @@ cli_tools:
 smart_contract:
   path: contracts/src/AccessCredentialNFT.sol
   type: ERC-721
+  version: "0.4.0"
   deployment:
     tool: Foundry (forge)
     command: |
@@ -348,16 +372,18 @@ smart_contract:
         --rpc-url $RPC_URL --private-key $DEPLOYER_KEY \
         --constructor-args "Access Credentials" "ACCESS" "$SIGNING_PAGE_BASE64" "$IMAGE_URI"
   minting:
-    function: "mint(address,bytes,bytes,string,string,string,string,uint256)"
+    function: "mint(address,bytes,string,string,string,string,uint256)"
     parameters:
       - to: Recipient wallet address
-      - serverEncryptedMachineId: ECIES encrypted machine ID
-      - clientEncryptedMachineId: Optional client-side encryption (0x for none)
-      - signingSecret: Optional signing secret (empty string for none)
-      - name: Token name/description
-      - image: Image URI (ipfs:// or data:)
-      - animationUrlBase64: Signing page HTML (base64, no data: prefix). Empty string for contract default.
+      - userEncrypted: AES-GCM encrypted connection details (signature-derived key)
+      - decryptMessage: Message user signs to derive decryption key
+      - description: Token description
+      - imageUri: Image URI (ipfs:// or data:)
+      - animationUrlBase64: Signing page HTML (base64). Empty string for contract default.
       - expiresAt: Unix timestamp (0 for no expiry)
+    notes: |
+      v0.4.0 removed serverEncrypted. Authentication is ownership-based only.
+      userEncrypted is optional - for storing connection details user can decrypt.
 
 security:
   considerations:
@@ -410,21 +436,37 @@ dependencies:
     - Foundry (for contract deployment)
 
 changelog:
+  - version: "0.4.0"
+    date: "2026-01-31"
+    breaking_changes:
+      - component: smart_contract
+        change: |
+          Removed serverEncrypted parameter from mint().
+          Old: mint(address,bytes,bytes,string,string,string,string,uint256)
+          New: mint(address,bytes,string,string,string,string,uint256)
+          Authentication is now purely ownership-based (no server-side decryption).
+      - component: pam_module
+        change: |
+          Removed private_key_file from [machine] config section.
+          NFT authentication no longer requires server private key.
+      - component: packaging
+        change: |
+          Split into two packages:
+          - libpam-web3: PAM module for VMs (authentication)
+          - libpam-web3-tools: Server tools (pam_web3_tool, web3-auth-svc, signing page)
+    new_features:
+      - Simplified ownership-based authentication (wallet + NFT token ID + GECOS)
+      - signing-page/generate.sh for creating customized signing pages
+      - Separate Debian packages for VMs vs management servers
+
   - version: "0.3.0"
     date: "2026-01-30"
     breaking_changes:
       - component: smart_contract
         function: "mint()"
         change: |
-          Added animationUrlBase64 parameter (8th parameter).
-          Old: mint(address,bytes,bytes,string,string,string,uint256)
-          New: mint(address,bytes,bytes,string,string,string,string,uint256)
-          Migration: Pass empty string "" as 7th parameter to use contract-wide default.
-      - component: smart_contract
-        function: "mintBatch()"
-        change: |
-          Added animationUrlBase64s array parameter (8th parameter).
-          Migration: Add empty string array for 7th parameter to use defaults.
+          Added animationUrlBase64 parameter.
+          Migration: Pass empty string "" to use contract-wide default.
     new_features:
       - Per-token animation_url storage (signing page per NFT)
       - updateAnimationUrl() function for existing tokens
