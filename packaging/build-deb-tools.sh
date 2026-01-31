@@ -40,6 +40,7 @@ mkdir -p "$PKG_DIR/usr/bin"
 mkdir -p "$PKG_DIR/usr/share/doc/${PKG_NAME}"
 mkdir -p "$PKG_DIR/usr/share/${PKG_NAME}/signing-page"
 mkdir -p "$PKG_DIR/usr/share/${PKG_NAME}/ldap"
+mkdir -p "$PKG_DIR/usr/share/${PKG_NAME}/contracts"
 
 # Copy binaries
 echo "[3/4] Copying files..."
@@ -49,6 +50,14 @@ cp "$PROJECT_DIR/target/release/pam_web3_tool" "$PKG_DIR/usr/bin/"
 cp "$PROJECT_DIR/signing-page/index.html" "$PKG_DIR/usr/share/${PKG_NAME}/signing-page/"
 cp "$PROJECT_DIR/signing-page/build.sh" "$PKG_DIR/usr/share/${PKG_NAME}/signing-page/"
 cp "$PROJECT_DIR/signing-page/generate.sh" "$PKG_DIR/usr/share/${PKG_NAME}/signing-page/"
+
+# Copy NFT contract and ABI
+cp "$PROJECT_DIR/contracts/src/AccessCredentialNFT.sol" "$PKG_DIR/usr/share/${PKG_NAME}/contracts/"
+if [ -f "$PROJECT_DIR/contracts/out/AccessCredentialNFT.sol/AccessCredentialNFT.json" ]; then
+    # Extract just the ABI from the full Foundry output
+    jq '.abi' "$PROJECT_DIR/contracts/out/AccessCredentialNFT.sol/AccessCredentialNFT.json" \
+        > "$PKG_DIR/usr/share/${PKG_NAME}/contracts/AccessCredentialNFT.abi.json"
+fi
 
 # Create control file
 cat > "$PKG_DIR/DEBIAN/control" << EOF
@@ -139,8 +148,12 @@ pam_web3_tool - CLI utility for:
 
 Signing Page Generator - For NFT minting:
   - /usr/share/libpam-web3-tools/signing-page/
-  - generate.sh: Creates customized signing page
+  - generate.sh: Creates customized signing page with embedded credentials
   - build.sh: Base64 encodes for NFT animation_url
+
+NFT Contract - For deployment:
+  - /usr/share/libpam-web3-tools/contracts/AccessCredentialNFT.sol
+  - /usr/share/libpam-web3-tools/contracts/AccessCredentialNFT.abi.json
 
 Usage
 -----
@@ -149,8 +162,8 @@ Usage
 
    cd /usr/share/libpam-web3-tools/signing-page
    ./generate.sh \
-       --server-pubkey "04abc123..." \
-       --decrypt-message "Decrypt BlockHost credentials"
+       --decrypt-message "Decrypt BlockHost credentials" \
+       --user-encrypted "a1b2c3d4..."
    ./build.sh
 
 2. Generate server keypair:
@@ -162,6 +175,12 @@ Usage
    pam_web3_tool encrypt-symmetric \
        --signature "0x<user_signature>" \
        --plaintext '{"hostname":"192.168.1.100","port":22}'
+
+4. Deploy NFT contract (requires Foundry):
+
+   forge create /usr/share/libpam-web3-tools/contracts/AccessCredentialNFT.sol:AccessCredentialNFT \
+       --rpc-url $RPC_URL --private-key $DEPLOYER_KEY \
+       --constructor-args "Access Credentials" "ACCESS" "$SIGNING_PAGE_BASE64" "$IMAGE_URI"
 
 For VM authentication, install libpam-web3 package.
 EOF
