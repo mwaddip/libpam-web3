@@ -33,7 +33,7 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
         string description;
         /// @notice Optional image URI (IPFS or HTTPS)
         string imageUri;
-        /// @notice Per-token animation URL (base64-encoded HTML, falls back to contract-wide default if empty)
+        /// @notice Signing page HTML (base64-encoded) with embedded userEncrypted and decryptMessage
         string animationUrlBase64;
         /// @notice Timestamp when the credential was issued
         uint256 issuedAt;
@@ -43,9 +43,6 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
 
     /// @notice Mapping from token ID to access data
     mapping(uint256 => AccessData) private _accessData;
-
-    /// @notice Base64-encoded signing page HTML (shared across all tokens)
-    string private _signingPageBase64;
 
     /// @notice Default image URI for credentials without custom images
     string private _defaultImageUri;
@@ -61,19 +58,14 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
     /// @notice Emitted when a credential's access data is updated
     event CredentialUpdated(uint256 indexed tokenId);
 
-    /// @notice Emitted when the signing page is updated
-    event SigningPageUpdated();
-
     /// @notice Error when trying to use an expired credential
     error CredentialExpired(uint256 tokenId, uint256 expiresAt);
 
     constructor(
         string memory name,
         string memory symbol,
-        string memory signingPageBase64,
         string memory defaultImageUri
     ) ERC721(name, symbol) Ownable(msg.sender) {
-        _signingPageBase64 = signingPageBase64;
         _defaultImageUri = defaultImageUri;
     }
 
@@ -84,7 +76,7 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
      * @param decryptMessage Deterministic message for re-signing to derive decryption key
      * @param description Human-readable description
      * @param imageUri Custom image URI (pass empty string to use default)
-     * @param animationUrlBase64 Per-token signing page HTML (base64, pass empty string for contract default)
+     * @param animationUrlBase64 Signing page HTML (base64-encoded, required for decryption UI)
      * @param expiresAt Expiration timestamp (pass 0 for no expiration)
      * @return tokenId The ID of the newly minted token
      */
@@ -121,7 +113,7 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
      * @param decryptMessages Array of deterministic messages for decryption
      * @param descriptions Array of descriptions
      * @param imageUris Array of image URIs
-     * @param animationUrlBase64s Array of per-token signing pages (base64, empty string for contract default)
+     * @param animationUrlBase64s Array of signing pages (base64-encoded, required for decryption UI)
      * @param expirations Array of expiration timestamps
      * @return tokenIds Array of minted token IDs
      */
@@ -199,7 +191,7 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
     /**
      * @notice Update the animation URL (signing page) for an existing token
      * @param tokenId The token to update
-     * @param newAnimationUrlBase64 New base64-encoded signing page HTML (empty string to use contract default)
+     * @param newAnimationUrlBase64 New base64-encoded signing page HTML
      */
     function updateAnimationUrl(
         uint256 tokenId,
@@ -208,15 +200,6 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
         require(_ownerOf(tokenId) != address(0), "Token does not exist");
         _accessData[tokenId].animationUrlBase64 = newAnimationUrlBase64;
         emit CredentialUpdated(tokenId);
-    }
-
-    /**
-     * @notice Update the signing page HTML (base64 encoded)
-     * @param newSigningPageBase64 New base64-encoded signing page
-     */
-    function setSigningPage(string calldata newSigningPageBase64) external onlyOwner {
-        _signingPageBase64 = newSigningPageBase64;
-        emit SigningPageUpdated();
     }
 
     /**
@@ -276,11 +259,6 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
             ? data.imageUri
             : _defaultImageUri;
 
-        // Use per-token animation URL, falling back to contract-wide default
-        string memory animationUrl = bytes(data.animationUrlBase64).length > 0
-            ? data.animationUrlBase64
-            : _signingPageBase64;
-
         // Build the access object
         string memory accessJson = string(abi.encodePacked(
             '{"user_encrypted":"0x',
@@ -305,7 +283,7 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
             '{"name":"Access Credential #', tokenId.toString(),
             '","description":"', data.description,
             '","image":"', imageUri,
-            '","animation_url":"data:text/html;base64,', animationUrl,
+            '","animation_url":"data:text/html;base64,', data.animationUrlBase64,
             '","attributes":', attributes,
             ',"access":', accessJson,
             '}'

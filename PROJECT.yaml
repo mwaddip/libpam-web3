@@ -5,7 +5,7 @@
 project:
   name: libpam-web3
   description: PAM module for Linux authentication via Ethereum wallet signatures
-  version: "0.4.0"
+  version: "0.5.0"
   license: MIT
   repository: https://github.com/mwaddip/libpam-web3
   language: Rust
@@ -436,6 +436,29 @@ dependencies:
     - Foundry (for contract deployment)
 
 changelog:
+  - version: "0.5.0"
+    date: "2026-01-31"
+    breaking_changes:
+      - component: smart_contract
+        change: |
+          Removed contract-wide signing page from constructor and storage.
+          Old constructor: AccessCredentialNFT(name, symbol, signingPageBase64, defaultImageUri)
+          New constructor: AccessCredentialNFT(name, symbol, defaultImageUri)
+          Each NFT must now provide its own animationUrlBase64 (no fallback).
+      - component: smart_contract
+        change: |
+          Removed setSigningPage() function and SigningPageUpdated event.
+          Use updateAnimationUrl(tokenId, newAnimationUrlBase64) for per-token updates.
+      - component: signing_page
+        change: |
+          generate.sh now takes --user-encrypted and --decrypt-message parameters.
+          Old: ./generate.sh --server-pubkey <hex> --decrypt-message <msg>
+          New: ./generate.sh --decrypt-message <msg> --user-encrypted <hex>
+          Each minted NFT has its own signing page with embedded credentials.
+    new_features:
+      - Signing page generator embeds userEncrypted and decryptMessage as read-only fields
+      - AccessCredentialNFT.sol and ABI included in libpam-web3-tools package
+
   - version: "0.4.0"
     date: "2026-01-31"
     breaking_changes:

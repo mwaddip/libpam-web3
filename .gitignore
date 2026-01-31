@@ -33,3 +33,4 @@ PLAN.md
 # Packaging artifacts
 /packaging/*.deb
 /packaging/libpam-web3_*/
+packaging/*_amd64/

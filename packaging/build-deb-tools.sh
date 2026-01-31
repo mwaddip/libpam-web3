@@ -17,7 +17,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-VERSION="0.4.0"
+VERSION="0.5.0"
 ARCH="amd64"
 PKG_NAME="libpam-web3-tools"
 PKG_DIR="$SCRIPT_DIR/${PKG_NAME}_${VERSION}_${ARCH}"

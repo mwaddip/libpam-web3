@@ -14,7 +14,7 @@ contract AccessCredentialNFTTest is Test {
     bytes public sampleUserEncrypted = hex"04fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
     string public sampleDecryptMessage = "libpam-web3:0x1234567890abcdef1234567890abcdef12345678:12345";
 
-    string public signingPageBase64 = "PCFET0NUWVBFIGh0bWw+PGh0bWw+PGhlYWQ+PC9oZWFkPjxib2R5PjxoMT5UZXN0PC9oMT48L2JvZHk+PC9odG1sPg==";
+    string public sampleSigningPage = "PCFET0NUWVBFIGh0bWw+PGh0bWw+PGhlYWQ+PC9oZWFkPjxib2R5PjxoMT5UZXN0PC9oMT48L2JvZHk+PC9odG1sPg==";
     string public defaultImageUri = "ipfs://QmTestImageHash";
 
     event CredentialMinted(
@@ -34,7 +34,6 @@ contract AccessCredentialNFTTest is Test {
         nft = new AccessCredentialNFT(
             "Web3 Access Credentials",
             "W3AC",
-            signingPageBase64,
             defaultImageUri
         );
     }
@@ -304,12 +303,6 @@ contract AccessCredentialNFTTest is Test {
         assertEq(nft.balanceOf(user2), 1);
     }
 
-    function testSetSigningPage() public {
-        string memory newSigningPage = "PGh0bWw+TmV3IFBhZ2U8L2h0bWw+";
-        nft.setSigningPage(newSigningPage);
-        // No direct getter, but should not revert
-    }
-
     function testSetDefaultImageUri() public {
         string memory newUri = "ipfs://QmNewDefaultImage";
         nft.setDefaultImageUri(newUri);
@@ -317,51 +310,49 @@ contract AccessCredentialNFTTest is Test {
     }
 
     function testPerTokenAnimationUrl() public {
-        // Use a different signing page for this specific token (must be longer than default which is 88 chars)
-        string memory customSigningPage = "PCFET0NUWVBFIGh0bWw+PGh0bWw+PGhlYWQ+PHRpdGxlPkN1c3RvbSBTaWduaW5nIFBhZ2U8L3RpdGxlPjwvaGVhZD48Ym9keT48aDE+Q3VzdG9tIFBhZ2UgV2l0aCBNdWNoIE1vcmUgQ29udGVudDwvaDE+PC9ib2R5PjwvaHRtbD4=";
+        // Each token has its own signing page with embedded credentials
+        string memory signingPage1 = "PCFET0NUWVBFIGh0bWw+PGh0bWw+PGhlYWQ+PC9oZWFkPjxib2R5PjxoMT5Ub2tlbiAxPC9oMT48L2JvZHk+PC9odG1sPg==";
+        string memory signingPage2 = "PCFET0NUWVBFIGh0bWw+PGh0bWw+PGhlYWQ+PHRpdGxlPkN1c3RvbSBTaWduaW5nIFBhZ2U8L3RpdGxlPjwvaGVhZD48Ym9keT48aDE+VG9rZW4gMiBXaXRoIE1vcmUgQ29udGVudDwvaDE+PC9ib2R5PjwvaHRtbD4=";
 
-        // First mint with empty (uses default)
-        uint256 tokenIdDefault = nft.mint(
+        uint256 tokenId1 = nft.mint(
             user1,
             sampleUserEncrypted,
             sampleDecryptMessage,
-            "Test Server Default",
+            "Test Server 1",
             "",
-            "", // Empty = use default
+            signingPage1,
             0
         );
 
-        // Then mint with custom animation URL
-        uint256 tokenIdCustom = nft.mint(
+        uint256 tokenId2 = nft.mint(
             user1,
             sampleUserEncrypted,
             sampleDecryptMessage,
-            "Test Server Custom",
+            "Test Server 2",
             "",
-            customSigningPage, // Per-token animation URL
+            signingPage2,
             0
         );
 
-        string memory uriDefault = nft.tokenURI(tokenIdDefault);
-        string memory uriCustom = nft.tokenURI(tokenIdCustom);
+        string memory uri1 = nft.tokenURI(tokenId1);
+        string memory uri2 = nft.tokenURI(tokenId2);
 
         // Both URIs should be valid
-        assertTrue(bytes(uriDefault).length > 0);
-        assertTrue(bytes(uriCustom).length > 0);
+        assertTrue(bytes(uri1).length > 0);
+        assertTrue(bytes(uri2).length > 0);
 
-        // The custom one should be longer since it has a longer animation URL
-        assertTrue(bytes(uriCustom).length > bytes(uriDefault).length);
+        // The second one should be longer since it has a longer animation URL
+        assertTrue(bytes(uri2).length > bytes(uri1).length);
     }
 
-    function testAnimationUrlFallbackToDefault() public {
-        // Mint with empty animation URL to use contract default
+    function testMintWithSigningPage() public {
         uint256 tokenId = nft.mint(
             user1,
             sampleUserEncrypted,
             sampleDecryptMessage,
             "Test Server",
             "",
-            "", // Empty = use contract default
+            sampleSigningPage,
             0
         );
 
@@ -371,52 +362,31 @@ contract AccessCredentialNFTTest is Test {
     }
 
     function testUpdateAnimationUrl() public {
+        string memory initialPage = "PCFET0NUWVBFIGh0bWw+PC9odG1sPg==";
+
         uint256 tokenId = nft.mint(
             user1,
             sampleUserEncrypted,
             sampleDecryptMessage,
             "Test Server",
             "",
-            "",
+            initialPage,
             0
         );
 
         string memory uriBefore = nft.tokenURI(tokenId);
 
-        // Update to a custom animation URL (must be longer than default)
-        string memory customSigningPage = "PCFET0NUWVBFIGh0bWw+PGh0bWw+PGhlYWQ+PHRpdGxlPlVwZGF0ZWQgU2lnbmluZyBQYWdlPC90aXRsZT48L2hlYWQ+PGJvZHk+PGgxPlVwZGF0ZWQgUGFnZSBXaXRoIE11Y2ggTW9yZSBDb250ZW50PC9oMT48L2JvZHk+PC9odG1sPg==";
+        // Update to a longer signing page
+        string memory updatedPage = "PCFET0NUWVBFIGh0bWw+PGh0bWw+PGhlYWQ+PHRpdGxlPlVwZGF0ZWQgU2lnbmluZyBQYWdlPC90aXRsZT48L2hlYWQ+PGJvZHk+PGgxPlVwZGF0ZWQgUGFnZSBXaXRoIE11Y2ggTW9yZSBDb250ZW50PC9oMT48L2JvZHk+PC9odG1sPg==";
 
         vm.expectEmit(true, false, false, false);
         emit CredentialUpdated(tokenId);
 
-        nft.updateAnimationUrl(tokenId, customSigningPage);
+        nft.updateAnimationUrl(tokenId, updatedPage);
 
         string memory uriAfter = nft.tokenURI(tokenId);
 
         assertTrue(bytes(uriAfter).length > bytes(uriBefore).length);
-    }
-
-    function testUpdateAnimationUrlToEmpty() public {
-        string memory customSigningPage = "PCFET0NUWVBFIGh0bWw+PGh0bWw+PGhlYWQ+PHRpdGxlPkN1c3RvbSBTaWduaW5nIFBhZ2U8L3RpdGxlPjwvaGVhZD48Ym9keT48aDE+Q3VzdG9tIFBhZ2UgV2l0aCBNdWNoIE1vcmUgQ29udGVudDwvaDE+PC9ib2R5PjwvaHRtbD4=";
-
-        uint256 tokenId = nft.mint(
-            user1,
-            sampleUserEncrypted,
-            sampleDecryptMessage,
-            "Test Server",
-            "",
-            customSigningPage,
-            0
-        );
-
-        string memory uriBefore = nft.tokenURI(tokenId);
-
-        // Update to empty (revert to contract default)
-        nft.updateAnimationUrl(tokenId, "");
-
-        string memory uriAfter = nft.tokenURI(tokenId);
-
-        assertTrue(bytes(uriAfter).length < bytes(uriBefore).length);
     }
 
     function testUpdateAnimationUrlOnlyOwner() public {
@@ -426,7 +396,7 @@ contract AccessCredentialNFTTest is Test {
             sampleDecryptMessage,
             "Test Server",
             "",
-            "",
+            sampleSigningPage,
             0
         );
 
