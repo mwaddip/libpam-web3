@@ -128,8 +128,8 @@ Two separate packages for different deployment targets:
 
 | Package | Install On | Contents |
 |---------|------------|----------|
-| `libpam-web3` | VMs (client machines) | PAM module, `/etc/pam_web3/config.toml` |
-| `libpam-web3-tools` | Management server | `pam_web3_tool`, `web3-auth-svc`, signing page scripts |
+| `libpam-web3` | VMs (client machines) | PAM module, `web3-auth-svc` daemon |
+| `libpam-web3-tools` | Management server | `pam_web3_tool`, signing page scripts |
 
 ## Signing Page Generator
 

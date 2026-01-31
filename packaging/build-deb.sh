@@ -29,21 +29,29 @@ rm -rf "$PKG_DIR"
 rm -f "$SCRIPT_DIR/${PKG_NAME}_${VERSION}_${ARCH}.deb"
 
 # Build PAM module with NFT support
-echo "[1/4] Building PAM module with NFT support..."
+echo "[1/5] Building PAM module with NFT support..."
 cd "$PROJECT_DIR"
 cargo build --release --features nft
 
+echo "[2/5] Building web3-auth-svc..."
+cd "$PROJECT_DIR/web3-auth-svc"
+cargo build --release
+
 # Create package directory structure
-echo "[2/4] Creating package structure..."
+echo "[3/5] Creating package structure..."
 mkdir -p "$PKG_DIR/DEBIAN"
 mkdir -p "$PKG_DIR/lib/x86_64-linux-gnu/security"
+mkdir -p "$PKG_DIR/usr/bin"
+mkdir -p "$PKG_DIR/usr/lib/systemd/system"
 mkdir -p "$PKG_DIR/etc/pam_web3"
+mkdir -p "$PKG_DIR/etc/web3-auth"
 mkdir -p "$PKG_DIR/usr/share/doc/${PKG_NAME}"
 mkdir -p "$PKG_DIR/usr/share/doc/${PKG_NAME}/examples"
 
-# Copy PAM module
-echo "[3/4] Copying files..."
+# Copy binaries
+echo "[4/5] Copying files..."
 cp "$PROJECT_DIR/target/release/libpam_web3.so" "$PKG_DIR/lib/x86_64-linux-gnu/security/"
+cp "$PROJECT_DIR/web3-auth-svc/target/release/web3-auth-svc" "$PKG_DIR/usr/bin/"
 
 # Create control file
 cat > "$PKG_DIR/DEBIAN/control" << EOF
@@ -62,18 +70,23 @@ Description: PAM module for Ethereum wallet-based NFT authentication
  .
  Install this package on VMs/servers where users authenticate via NFT.
  .
+ This package includes:
+  - PAM module (pam_web3.so)
+  - web3-auth-svc daemon for blockchain queries
+ .
  Features:
   - NFT-based access control (wallet + token ID)
   - Ownership verification via blockchain query
   - GECOS-based username mapping (nft=TOKEN_ID)
   - Challenge-response OTP authentication
  .
- For server-side tools (minting, key generation), install libpam-web3-tools.
+ For admin tools (minting, key generation), install libpam-web3-tools.
 EOF
 
 # Create conffiles
 cat > "$PKG_DIR/DEBIAN/conffiles" << EOF
 /etc/pam_web3/config.toml
+/etc/web3-auth/config.toml
 EOF
 
 # Create postinst script
@@ -87,22 +100,33 @@ case "$1" in
         ln -sf /lib/x86_64-linux-gnu/security/libpam_web3.so \
                /lib/x86_64-linux-gnu/security/pam_web3.so 2>/dev/null || true
 
+        # Create runtime directory for web3-auth-svc
+        mkdir -p /run/web3-auth
+        chmod 755 /run/web3-auth
+
         # Create config directory permissions
         chmod 750 /etc/pam_web3 2>/dev/null || true
+        chmod 750 /etc/web3-auth 2>/dev/null || true
+
+        # Reload systemd if available
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl daemon-reload || true
+        fi
 
         echo ""
         echo "=== libpam-web3 installed ==="
         echo ""
-        echo "Configuration: /etc/pam_web3/config.toml"
+        echo "Configuration files:"
+        echo "  /etc/pam_web3/config.toml   (PAM module)"
+        echo "  /etc/web3-auth/config.toml  (blockchain service)"
         echo ""
         echo "Quick setup:"
-        echo "1. Edit /etc/pam_web3/config.toml with your settings"
-        echo "2. Create user with NFT token ID in GECOS:"
+        echo "1. Edit configuration files with your settings"
+        echo "2. Start the blockchain service:"
+        echo "   systemctl enable --now web3-auth-svc"
+        echo "3. Create user with NFT token ID in GECOS:"
         echo "   useradd -m -c 'nft=TOKEN_ID' username"
-        echo "3. Configure PAM (see /usr/share/doc/libpam-web3/)"
-        echo ""
-        echo "The blockchain query service (web3-auth-svc) must be running."
-        echo "Install libpam-web3-tools on your management server."
+        echo "4. Configure PAM (see /usr/share/doc/libpam-web3/)"
         echo ""
         ;;
 esac
@@ -115,6 +139,17 @@ chmod 755 "$PKG_DIR/DEBIAN/postinst"
 cat > "$PKG_DIR/DEBIAN/prerm" << 'EOF'
 #!/bin/bash
 set -e
+
+case "$1" in
+    remove|purge)
+        # Stop service if running
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl stop web3-auth-svc 2>/dev/null || true
+            systemctl disable web3-auth-svc 2>/dev/null || true
+        fi
+        ;;
+esac
+
 exit 0
 EOF
 chmod 755 "$PKG_DIR/DEBIAN/prerm"
@@ -127,6 +162,8 @@ set -e
 case "$1" in
     purge)
         rm -rf /etc/pam_web3 2>/dev/null || true
+        rm -rf /etc/web3-auth 2>/dev/null || true
+        rm -rf /run/web3-auth 2>/dev/null || true
         rm -f /lib/x86_64-linux-gnu/security/pam_web3.so 2>/dev/null || true
         ;;
     remove)
@@ -183,6 +220,63 @@ timeout_seconds = 10
 # timeout_seconds = 10
 EOF
 
+# Create web3-auth config
+cat > "$PKG_DIR/etc/web3-auth/config.toml" << 'EOF'
+# web3-auth-svc configuration
+# Blockchain query service for libpam-web3
+
+# Unix socket path
+socket_path = "/run/web3-auth/web3-auth.sock"
+
+# Backend type: "jsonrpc" or "etherscan"
+backend = "jsonrpc"
+
+# Default chain ID (1=mainnet, 11155111=sepolia)
+default_chain_id = 11155111
+
+# Default NFT contract address
+default_contract = "0xYourContractAddress"
+
+[jsonrpc]
+# Ethereum JSON-RPC endpoint
+rpc_url = "https://ethereum-sepolia-rpc.publicnode.com"
+timeout_seconds = 30
+
+# [etherscan]
+# api_url = "https://api.etherscan.io"
+# api_key = "YOUR_API_KEY"
+# timeout_seconds = 30
+EOF
+
+# Create systemd service file
+cat > "$PKG_DIR/usr/lib/systemd/system/web3-auth-svc.service" << 'EOF'
+[Unit]
+Description=Web3 Authentication Service
+Documentation=https://github.com/mwaddip/libpam-web3
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/web3-auth-svc --config /etc/web3-auth/config.toml --foreground
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/run/web3-auth
+
+# Runtime directory
+RuntimeDirectory=web3-auth
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 # Create documentation
 cat > "$PKG_DIR/usr/share/doc/${PKG_NAME}/README.Debian" << 'EOF'
 libpam-web3 for Debian
@@ -237,11 +331,11 @@ Quick Setup
 Requirements
 ------------
 
-- web3-auth-svc must be running and accessible via Unix socket
 - NFT contract must be deployed with user's token
 - User's wallet must own the NFT matching their GECOS entry
+- web3-auth-svc must be running (systemctl enable --now web3-auth-svc)
 
-For server-side tools, install libpam-web3-tools.
+For admin tools (minting, key generation), install libpam-web3-tools.
 EOF
 
 # Example PAM config
@@ -270,10 +364,12 @@ find "$PKG_DIR" -type f -exec chmod 644 {} \;
 chmod 755 "$PKG_DIR/DEBIAN/postinst"
 chmod 755 "$PKG_DIR/DEBIAN/prerm"
 chmod 755 "$PKG_DIR/DEBIAN/postrm"
+chmod 755 "$PKG_DIR/usr/bin/"*
 chmod 640 "$PKG_DIR/etc/pam_web3/config.toml"
+chmod 640 "$PKG_DIR/etc/web3-auth/config.toml"
 
 # Build the package
-echo "[4/4] Building .deb package..."
+echo "[5/5] Building .deb package..."
 cd "$SCRIPT_DIR"
 dpkg-deb --build --root-owner-group "$PKG_DIR"
 
