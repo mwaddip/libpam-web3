@@ -1,8 +1,8 @@
 #!/bin/bash
-# Generate a signing page with server public key and decrypt message
+# Generate a signing page with pre-filled decrypt credentials
 #
 # Usage:
-#   ./generate.sh --server-pubkey <hex> --decrypt-message <message> [--output <file>]
+#   ./generate.sh --decrypt-message <message> --user-encrypted <hex> [--output <file>]
 #
 # This creates an index.html with the values embedded, ready for build.sh
 
@@ -11,18 +11,18 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT="$SCRIPT_DIR/index.html"
 
-SERVER_PUBKEY=""
 DECRYPT_MESSAGE=""
+USER_ENCRYPTED=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        -k|--server-pubkey)
-            SERVER_PUBKEY="$2"
-            shift 2
-            ;;
         -m|--decrypt-message)
             DECRYPT_MESSAGE="$2"
+            shift 2
+            ;;
+        -e|--user-encrypted)
+            USER_ENCRYPTED="$2"
             shift 2
             ;;
         -o|--output)
@@ -30,16 +30,16 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -h|--help)
-            echo "Usage: $0 --server-pubkey <hex> --decrypt-message <message>"
+            echo "Usage: $0 --decrypt-message <message> --user-encrypted <hex>"
             echo ""
             echo "Options:"
-            echo "  -k, --server-pubkey    Server's secp256k1 public key (hex, with or without 04 prefix)"
             echo "  -m, --decrypt-message  Message user signs to derive decryption key"
+            echo "  -e, --user-encrypted   Encrypted connection details (hex)"
             echo "  -o, --output           Output file (default: index.html)"
             echo "  -h, --help             Show this help"
             echo ""
             echo "Example:"
-            echo "  $0 -k 04a1b2c3... -m 'Decrypt BlockHost credentials'"
+            echo "  $0 -m 'Decrypt BlockHost credentials' -e 'a1b2c3d4...'"
             echo "  ./build.sh  # Then run build.sh to base64 encode"
             exit 0
             ;;
@@ -51,13 +51,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Check required parameters
-if [ -z "$SERVER_PUBKEY" ]; then
-    echo "Error: --server-pubkey is required"
+if [ -z "$DECRYPT_MESSAGE" ]; then
+    echo "Error: --decrypt-message is required"
     exit 1
 fi
 
-if [ -z "$DECRYPT_MESSAGE" ]; then
-    echo "Error: --decrypt-message is required"
+if [ -z "$USER_ENCRYPTED" ]; then
+    echo "Error: --user-encrypted is required"
     exit 1
 fi
 
@@ -66,8 +66,8 @@ escape_sed() {
     echo "$1" | sed 's/[&/\]/\\&/g'
 }
 
-SERVER_PUBKEY_ESC=$(escape_sed "$SERVER_PUBKEY")
 DECRYPT_MESSAGE_ESC=$(escape_sed "$DECRYPT_MESSAGE")
+USER_ENCRYPTED_ESC=$(escape_sed "$USER_ENCRYPTED")
 
 cat > "$OUTPUT" << 'HTMLEOF'
 <!DOCTYPE html>
@@ -172,8 +172,8 @@ button{width:100%;padding:12px;border:none;border-radius:8px;font-size:1rem;curs
 <script>
 (function(){
 const CONFIG={
-    serverPublicKey:'__SERVER_PUBKEY__',
-    decryptMessage:'__DECRYPT_MESSAGE__'
+    decryptMessage:'__DECRYPT_MESSAGE__',
+    userEncrypted:'__USER_ENCRYPTED__'
 };
 
 let addr='';
@@ -192,9 +192,16 @@ document.querySelectorAll('.tab').forEach(tab=>{
     };
 });
 
-// Pre-fill decrypt message if configured
+// Pre-fill decrypt fields if configured (and make read-only)
 if(CONFIG.decryptMessage && CONFIG.decryptMessage !== '__DECRYPT_MESSAGE__'){
     $('decrypt-msg').value = CONFIG.decryptMessage;
+    $('decrypt-msg').readOnly = true;
+    $('decrypt-msg').style.opacity = '0.7';
+}
+if(CONFIG.userEncrypted && CONFIG.userEncrypted !== '__USER_ENCRYPTED__'){
+    $('encrypted-data').value = CONFIG.userEncrypted;
+    $('encrypted-data').readOnly = true;
+    $('encrypted-data').style.opacity = '0.7';
 }
 
 async function connect(){
@@ -386,11 +393,11 @@ if(window.ethereum&&window.ethereum.selectedAddress){
 HTMLEOF
 
 # Replace placeholders with actual values
-sed -i "s|__SERVER_PUBKEY__|$SERVER_PUBKEY_ESC|g" "$OUTPUT"
 sed -i "s|__DECRYPT_MESSAGE__|$DECRYPT_MESSAGE_ESC|g" "$OUTPUT"
+sed -i "s|__USER_ENCRYPTED__|$USER_ENCRYPTED_ESC|g" "$OUTPUT"
 
 echo "Generated: $OUTPUT"
-echo "Server public key: ${SERVER_PUBKEY:0:20}..."
-echo "Decrypt message:   $DECRYPT_MESSAGE"
+echo "Decrypt message: $DECRYPT_MESSAGE"
+echo "User encrypted:  ${USER_ENCRYPTED:0:40}..."
 echo ""
 echo "Run ./build.sh to create base64-encoded version for NFT minting."
