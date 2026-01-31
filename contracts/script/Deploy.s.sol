@@ -22,24 +22,11 @@ contract Deploy is Script {
             string("ipfs://QmDefaultImageHashHere")
         );
 
-        // Read the signing page base64 from file or environment
-        string memory signingPageBase64 = vm.envOr(
-            "SIGNING_PAGE_BASE64",
-            string("")
-        );
-
-        // If no signing page provided, use a minimal placeholder
-        if (bytes(signingPageBase64).length == 0) {
-            // This is a minimal placeholder - replace with actual signing page
-            signingPageBase64 = "PCFET0NUWVBFIGh0bWw+PGh0bWw+PGhlYWQ+PHRpdGxlPldlYjMgQXV0aDwvdGl0bGU+PC9oZWFkPjxib2R5PjxoMT5TaWduaW5nIFBhZ2UgUGxhY2Vob2xkZXI8L2gxPjwvYm9keT48L2h0bWw+";
-        }
-
         vm.startBroadcast(deployerPrivateKey);
 
         AccessCredentialNFT nft = new AccessCredentialNFT(
             name,
             symbol,
-            signingPageBase64,
             defaultImageUri
         );
 
