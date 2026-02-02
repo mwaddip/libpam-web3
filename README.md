@@ -122,6 +122,127 @@ conn.connect({
 cast wallet sign "Authenticate to my-server with code: 123456" --private-key $WALLET_KEY
 ```
 
+### Decrypting Connection Details from NFT
+
+NFTs can store encrypted connection details (hostname, port) that only the wallet owner can decrypt. The encryption uses AES-256-GCM with a key derived from signing the `decrypt_message`.
+
+#### Python Example
+
+```python
+from eth_account import Account
+from eth_account.messages import encode_defunct
+from Crypto.Cipher import AES
+import requests
+import base64
+import json
+
+def get_connection_info(contract_address, token_id, private_key, rpc_url):
+    """Decrypt connection details from an NFT."""
+
+    # 1. Fetch token URI from contract
+    # tokenURI(uint256) selector = 0xc87b56dd
+    call_data = f"0xc87b56dd{token_id:064x}"
+    response = requests.post(rpc_url, json={
+        "jsonrpc": "2.0",
+        "method": "eth_call",
+        "params": [{"to": contract_address, "data": call_data}, "latest"],
+        "id": 1
+    }).json()
+
+    # 2. Decode the base64 JSON metadata
+    uri = bytes.fromhex(response["result"][2:]).decode('utf-8').strip('\x00')
+    if uri.startswith("data:application/json;base64,"):
+        metadata = json.loads(base64.b64decode(uri[29:]))
+
+    # 3. Extract encrypted data and decrypt message
+    access = metadata.get("access", {})
+    user_encrypted = access.get("user_encrypted", "")  # hex string
+    decrypt_message = access.get("decrypt_message", "")
+
+    if not user_encrypted or not decrypt_message:
+        raise ValueError("NFT has no encrypted connection details")
+
+    # 4. Sign the decrypt message to derive the key
+    signable = encode_defunct(text=decrypt_message)
+    signed = Account.sign_message(signable, private_key=private_key)
+
+    # 5. Derive AES key: keccak256(signature)
+    from eth_utils import keccak
+    key = keccak(signed.signature)
+
+    # 6. Decrypt (format: IV[12] || ciphertext || authTag[16])
+    data = bytes.fromhex(user_encrypted.replace("0x", ""))
+    iv = data[:12]
+    ciphertext = data[12:-16]
+    tag = data[-16:]
+
+    cipher = AES.new(key, AES.MODE_GCM, nonce=iv)
+    plaintext = cipher.decrypt_and_verify(ciphertext, tag)
+
+    return json.loads(plaintext.decode('utf-8'))
+
+# Usage
+connection = get_connection_info(
+    contract_address="0x51BD579B7757BA1bDF777844e4B964678d237EA8",
+    token_id=0,
+    private_key="0x...",
+    rpc_url="https://ethereum-sepolia-rpc.publicnode.com"
+)
+print(connection)  # {"hostname": "192.168.1.100", "port": 22}
+```
+
+#### Node.js Example
+
+```javascript
+const { Wallet, JsonRpcProvider, keccak256 } = require('ethers');
+const crypto = require('crypto');
+
+async function getConnectionInfo(contractAddress, tokenId, privateKey, rpcUrl) {
+  const provider = new JsonRpcProvider(rpcUrl);
+  const wallet = new Wallet(privateKey);
+
+  // 1. Fetch token URI
+  const abi = ['function tokenURI(uint256) view returns (string)'];
+  const contract = new ethers.Contract(contractAddress, abi, provider);
+  const uri = await contract.tokenURI(tokenId);
+
+  // 2. Decode metadata
+  const json = Buffer.from(uri.split(',')[1], 'base64').toString();
+  const metadata = JSON.parse(json);
+
+  // 3. Get encrypted data
+  const { user_encrypted, decrypt_message } = metadata.access;
+
+  // 4. Sign to derive key
+  const signature = await wallet.signMessage(decrypt_message);
+  const key = Buffer.from(keccak256(signature).slice(2), 'hex');
+
+  // 5. Decrypt
+  const data = Buffer.from(user_encrypted.replace('0x', ''), 'hex');
+  const iv = data.slice(0, 12);
+  const ciphertext = data.slice(12, -16);
+  const tag = data.slice(-16);
+
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+
+  return JSON.parse(plaintext.toString());
+}
+```
+
+#### Complete AI Agent Flow
+
+```python
+# 1. Get connection details from NFT
+connection = get_connection_info(CONTRACT, TOKEN_ID, WALLET_KEY, RPC_URL)
+hostname = connection["hostname"]
+port = connection.get("port", 22)
+
+# 2. SSH with wallet authentication
+ssh_with_wallet(hostname, "myuser", WALLET_KEY)
+```
+
 ### Security Considerations
 
 - Store the wallet private key securely (environment variable, secrets manager)
