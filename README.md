@@ -38,6 +38,96 @@ Enterprise-grade authentication via NFT ownership on EVM blockchains, with LDAP 
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+## AI Agent Authentication
+
+AI agents (like [OpenClaw](https://github.com/openclaw), Claude Code, or custom automation) can authenticate programmatically without a browser. The wallet signature is just secp256k1 ECDSA - any Ethereum signing library works.
+
+### Python Example
+
+```python
+import paramiko
+from eth_account import Account
+from eth_account.messages import encode_defunct
+import re
+
+def ssh_with_wallet(host, username, private_key_hex):
+    """SSH into a server using Ethereum wallet authentication."""
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    # Custom transport for interactive auth
+    transport = paramiko.Transport((host, 22))
+    transport.connect(username=username)
+
+    def auth_handler(title, instructions, prompts):
+        responses = []
+        for prompt, echo in prompts:
+            if 'code:' in prompt.lower():
+                # Extract OTP and machine ID from prompt
+                # Format: "Authenticate to {machine_id} with code: {otp}"
+                match = re.search(r'to (\S+) with code: (\d+)', prompt)
+                if match:
+                    machine_id, otp = match.groups()
+                    message = f"Authenticate to {machine_id} with code: {otp}"
+
+                    # Sign the message with Ethereum wallet
+                    signable = encode_defunct(text=message)
+                    signed = Account.sign_message(signable, private_key=private_key_hex)
+                    responses.append(signed.signature.hex())
+            else:
+                responses.append('')
+        return responses
+
+    transport.auth_interactive(username, auth_handler)
+    return paramiko.SSHClient()._transport = transport
+
+# Usage
+WALLET_PRIVATE_KEY = "0x..."  # The wallet that owns the NFT or is in wallets file
+ssh_with_wallet("server.example.com", "myuser", WALLET_PRIVATE_KEY)
+```
+
+### Node.js Example
+
+```javascript
+const { Client } = require('ssh2');
+const { Wallet } = require('ethers');
+
+const wallet = new Wallet('0x<private_key>');
+
+const conn = new Client();
+conn.on('keyboard-interactive', (name, instructions, lang, prompts, finish) => {
+  const responses = prompts.map(p => {
+    const match = p.prompt.match(/to (\S+) with code: (\d+)/);
+    if (match) {
+      const [, machineId, otp] = match;
+      const message = `Authenticate to ${machineId} with code: ${otp}`;
+      return wallet.signMessageSync(message);
+    }
+    return '';
+  });
+  finish(responses);
+});
+
+conn.connect({
+  host: 'server.example.com',
+  username: 'myuser',
+  tryKeyboard: true
+});
+```
+
+### Using Foundry's cast
+
+```bash
+# Read OTP from SSH prompt, then sign:
+cast wallet sign "Authenticate to my-server with code: 123456" --private-key $WALLET_KEY
+```
+
+### Security Considerations
+
+- Store the wallet private key securely (environment variable, secrets manager)
+- The wallet must own the required NFT (NFT mode) or be listed in the wallets file (wallet mode)
+- Consider using a dedicated wallet for AI agent access with limited permissions
+
 ## Quick Start
 
 ### 1. Build the PAM Module
