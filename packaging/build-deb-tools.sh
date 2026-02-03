@@ -29,21 +29,43 @@ rm -rf "$PKG_DIR"
 rm -f "$SCRIPT_DIR/${PKG_NAME}_${VERSION}_${ARCH}.deb"
 
 # Build pam_web3_tool
-echo "[1/4] Building pam_web3_tool..."
+echo "[1/5] Building pam_web3_tool..."
 cd "$PROJECT_DIR"
 cargo build --release --features nft
 
+# Compile Solidity contracts
+echo "[2/5] Compiling Solidity contracts..."
+CONTRACTS_COMPILED=false
+if command -v forge &> /dev/null; then
+    cd "$PROJECT_DIR/contracts"
+    forge build
+    CONTRACTS_COMPILED=true
+elif [ -f "$HOME/.foundry/bin/forge" ]; then
+    cd "$PROJECT_DIR/contracts"
+    "$HOME/.foundry/bin/forge" build
+    CONTRACTS_COMPILED=true
+else
+    echo "WARNING: Foundry (forge) not found. Skipping contract compilation."
+    echo "         Install with: curl -L https://foundry.paradigm.xyz | bash && foundryup"
+    echo "         Or ensure forge is in PATH."
+    # Check if pre-compiled artifact exists
+    if [ -f "$PROJECT_DIR/contracts/out/AccessCredentialNFT.sol/AccessCredentialNFT.json" ]; then
+        echo "         Using existing compiled artifact."
+        CONTRACTS_COMPILED=true
+    fi
+fi
+
 # Create package directory structure
-echo "[2/4] Creating package structure..."
+echo "[3/5] Creating package structure..."
 mkdir -p "$PKG_DIR/DEBIAN"
 mkdir -p "$PKG_DIR/usr/bin"
 mkdir -p "$PKG_DIR/usr/share/doc/${PKG_NAME}"
 mkdir -p "$PKG_DIR/usr/share/${PKG_NAME}/signing-page"
 mkdir -p "$PKG_DIR/usr/share/${PKG_NAME}/ldap"
-mkdir -p "$PKG_DIR/usr/share/${PKG_NAME}/contracts"
+mkdir -p "$PKG_DIR/usr/share/blockhost/contracts"
 
 # Copy binaries
-echo "[3/4] Copying files..."
+echo "[4/5] Copying files..."
 cp "$PROJECT_DIR/target/release/pam_web3_tool" "$PKG_DIR/usr/bin/"
 
 # Copy signing page scripts
@@ -51,12 +73,17 @@ cp "$PROJECT_DIR/signing-page/index.html" "$PKG_DIR/usr/share/${PKG_NAME}/signin
 cp "$PROJECT_DIR/signing-page/build.sh" "$PKG_DIR/usr/share/${PKG_NAME}/signing-page/"
 cp "$PROJECT_DIR/signing-page/generate.sh" "$PKG_DIR/usr/share/${PKG_NAME}/signing-page/"
 
-# Copy NFT contract and ABI
-cp "$PROJECT_DIR/contracts/src/AccessCredentialNFT.sol" "$PKG_DIR/usr/share/${PKG_NAME}/contracts/"
-if [ -f "$PROJECT_DIR/contracts/out/AccessCredentialNFT.sol/AccessCredentialNFT.json" ]; then
-    # Extract just the ABI from the full Foundry output
-    jq '.abi' "$PROJECT_DIR/contracts/out/AccessCredentialNFT.sol/AccessCredentialNFT.json" \
-        > "$PKG_DIR/usr/share/${PKG_NAME}/contracts/AccessCredentialNFT.abi.json"
+# Copy NFT contract source
+cp "$PROJECT_DIR/contracts/src/AccessCredentialNFT.sol" "$PKG_DIR/usr/share/blockhost/contracts/"
+
+# Copy compiled artifact (contains ABI and bytecode for deployment)
+if [ "$CONTRACTS_COMPILED" = true ] && [ -f "$PROJECT_DIR/contracts/out/AccessCredentialNFT.sol/AccessCredentialNFT.json" ]; then
+    cp "$PROJECT_DIR/contracts/out/AccessCredentialNFT.sol/AccessCredentialNFT.json" \
+        "$PKG_DIR/usr/share/blockhost/contracts/"
+    echo "         Included compiled artifact with ABI and bytecode."
+else
+    echo "WARNING: Compiled contract artifact not available."
+    echo "         Package will only include source file."
 fi
 
 # Create control file
@@ -99,8 +126,11 @@ case "$1" in
         echo ""
         echo "Usage:"
         echo "  cd /usr/share/libpam-web3-tools/signing-page/"
-        echo "  ./generate.sh --server-pubkey '04...' --decrypt-message 'Decrypt credentials'"
+        echo "  ./generate.sh --decrypt-message 'Decrypt credentials' --user-encrypted 'a1b2c3...'"
         echo "  ./build.sh"
+        echo ""
+        echo "NFT Contract artifact:"
+        echo "  /usr/share/blockhost/contracts/AccessCredentialNFT.json"
         echo ""
         ;;
 esac
@@ -152,8 +182,8 @@ Signing Page Generator - For NFT minting:
   - build.sh: Base64 encodes for NFT animation_url
 
 NFT Contract - For deployment:
-  - /usr/share/libpam-web3-tools/contracts/AccessCredentialNFT.sol
-  - /usr/share/libpam-web3-tools/contracts/AccessCredentialNFT.abi.json
+  - /usr/share/blockhost/contracts/AccessCredentialNFT.sol (source)
+  - /usr/share/blockhost/contracts/AccessCredentialNFT.json (compiled artifact with ABI + bytecode)
 
 Usage
 -----
@@ -176,11 +206,20 @@ Usage
        --signature "0x<user_signature>" \
        --plaintext '{"hostname":"192.168.1.100","port":22}'
 
-4. Deploy NFT contract (requires Foundry):
+4. Deploy NFT contract:
 
-   forge create /usr/share/libpam-web3-tools/contracts/AccessCredentialNFT.sol:AccessCredentialNFT \
+   The compiled artifact at /usr/share/blockhost/contracts/AccessCredentialNFT.json
+   contains the ABI and bytecode for deployment. Example with ethers.js:
+
+   const artifact = require('/usr/share/blockhost/contracts/AccessCredentialNFT.json');
+   const factory = new ethers.ContractFactory(artifact.abi, artifact.bytecode.object, signer);
+   const nft = await factory.deploy("Access Credentials", "ACCESS", "ipfs://defaultImage");
+
+   Or with Foundry:
+
+   forge create /usr/share/blockhost/contracts/AccessCredentialNFT.sol:AccessCredentialNFT \
        --rpc-url $RPC_URL --private-key $DEPLOYER_KEY \
-       --constructor-args "Access Credentials" "ACCESS" "$SIGNING_PAGE_BASE64" "$IMAGE_URI"
+       --constructor-args "Access Credentials" "ACCESS" "$DEFAULT_IMAGE_URI"
 
 For VM authentication, install libpam-web3 package.
 EOF
@@ -193,7 +232,7 @@ chmod 755 "$PKG_DIR/usr/bin/"*
 chmod 755 "$PKG_DIR/usr/share/${PKG_NAME}/signing-page/"*.sh
 
 # Build the package
-echo "[4/4] Building .deb package..."
+echo "[5/5] Building .deb package..."
 cd "$SCRIPT_DIR"
 dpkg-deb --build --root-owner-group "$PKG_DIR"
 
