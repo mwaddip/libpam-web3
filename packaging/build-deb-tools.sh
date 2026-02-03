@@ -38,12 +38,12 @@ echo "[2/5] Compiling Solidity contracts..."
 CONTRACTS_COMPILED=false
 if command -v forge &> /dev/null; then
     cd "$PROJECT_DIR/contracts"
-    forge install
+    forge install foundry-rs/forge-std OpenZeppelin/openzeppelin-contracts
     forge build
     CONTRACTS_COMPILED=true
 elif [ -f "$HOME/.foundry/bin/forge" ]; then
     cd "$PROJECT_DIR/contracts"
-    "$HOME/.foundry/bin/forge" install
+    "$HOME/.foundry/bin/forge" install foundry-rs/forge-std OpenZeppelin/openzeppelin-contracts
     "$HOME/.foundry/bin/forge" build
     CONTRACTS_COMPILED=true
 else
