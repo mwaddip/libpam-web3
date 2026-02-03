@@ -38,12 +38,12 @@ echo "[2/5] Compiling Solidity contracts..."
 CONTRACTS_COMPILED=false
 if command -v forge &> /dev/null; then
     cd "$PROJECT_DIR/contracts"
-    forge install --no-commit
+    forge install
     forge build
     CONTRACTS_COMPILED=true
 elif [ -f "$HOME/.foundry/bin/forge" ]; then
     cd "$PROJECT_DIR/contracts"
-    "$HOME/.foundry/bin/forge" install --no-commit
+    "$HOME/.foundry/bin/forge" install
     "$HOME/.foundry/bin/forge" build
     CONTRACTS_COMPILED=true
 else
