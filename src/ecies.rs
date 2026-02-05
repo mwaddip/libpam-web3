@@ -24,8 +24,14 @@ use crypto_box::{
     aead::{AeadCore, OsRng},
     PublicKey as X25519PublicKey, SalsaBox, SecretKey as X25519SecretKey,
 };
+use hkdf::Hkdf;
+use k256::{
+    ecdh::EphemeralSecret, elliptic_curve::sec1::ToEncodedPoint, PublicKey as K256PublicKey,
+    SecretKey as K256SecretKey,
+};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use sha3::{Digest, Keccak256};
 use thiserror::Error;
 
@@ -138,6 +144,140 @@ pub fn derive_public_key(private_key: &[u8]) -> Result<String, EciesError> {
 
     let pk = ecies::PublicKey::from_secret_key(&sk);
     Ok(hex::encode(pk.serialize()))
+}
+
+// ============================================================================
+// Custom secp256k1 ECIES (compatible with noble-secp256k1 / JS implementation)
+// ============================================================================
+//
+// Format: ephemeralPubKey (65 bytes) || iv (12 bytes) || ciphertext || authTag (16 bytes)
+// Key derivation: HKDF-SHA256 with empty salt and empty info
+// Encryption: AES-256-GCM
+//
+// This matches the format used by:
+// - @noble/secp256k1 / @noble/curves
+// - blockhost-engine signup page JavaScript
+//
+
+/// ECIES constants for the custom format
+const ECIES_PUBKEY_SIZE: usize = 65; // Uncompressed public key
+const ECIES_IV_SIZE: usize = 12; // AES-GCM IV
+const ECIES_TAG_SIZE: usize = 16; // AES-GCM auth tag
+
+/// Decrypt data encrypted with the noble-secp256k1 compatible ECIES format
+///
+/// Format: ephemeralPubKey (65 bytes) || iv (12 bytes) || ciphertext || authTag (16 bytes)
+/// Key derivation: HKDF-SHA256(sharedX, salt="", info="", length=32)
+///
+/// # Arguments
+/// * `private_key` - The recipient's secp256k1 private key (32 bytes)
+/// * `ciphertext` - The encrypted data (hex string with optional 0x prefix)
+///
+/// # Returns
+/// The decrypted plaintext as a UTF-8 string
+pub fn decrypt_noble(private_key: &[u8], ciphertext: &str) -> Result<String, EciesError> {
+    if private_key.len() != 32 {
+        return Err(EciesError::InvalidPrivateKey);
+    }
+
+    let ciphertext_hex = ciphertext.trim();
+    let ciphertext_hex = ciphertext_hex.strip_prefix("0x").unwrap_or(ciphertext_hex);
+    let ciphertext_bytes = hex::decode(ciphertext_hex)?;
+
+    // Minimum size: pubkey (65) + iv (12) + at least 1 byte ciphertext + tag (16) = 94
+    let min_size = ECIES_PUBKEY_SIZE + ECIES_IV_SIZE + 1 + ECIES_TAG_SIZE;
+    if ciphertext_bytes.len() < min_size {
+        return Err(EciesError::InvalidCiphertext);
+    }
+
+    // Parse components
+    let ephemeral_pk_bytes = &ciphertext_bytes[..ECIES_PUBKEY_SIZE];
+    let iv = &ciphertext_bytes[ECIES_PUBKEY_SIZE..ECIES_PUBKEY_SIZE + ECIES_IV_SIZE];
+    let encrypted_with_tag = &ciphertext_bytes[ECIES_PUBKEY_SIZE + ECIES_IV_SIZE..];
+
+    // Parse the ephemeral public key
+    let ephemeral_pk = K256PublicKey::from_sec1_bytes(ephemeral_pk_bytes)
+        .map_err(|_| EciesError::InvalidPublicKey)?;
+
+    // Parse our private key
+    let sk = K256SecretKey::from_slice(private_key).map_err(|_| EciesError::InvalidPrivateKey)?;
+
+    // Perform ECDH to get shared secret (just the X coordinate)
+    let shared_secret = k256::ecdh::diffie_hellman(sk.to_nonzero_scalar(), ephemeral_pk.as_affine());
+    let shared_x = shared_secret.raw_secret_bytes();
+
+    // Derive AES key using HKDF-SHA256 with empty salt and empty info
+    let hk = Hkdf::<Sha256>::new(Some(&[]), shared_x);
+    let mut aes_key = [0u8; 32];
+    hk.expand(&[], &mut aes_key)
+        .map_err(|_| EciesError::DecryptionFailed)?;
+
+    // Decrypt with AES-256-GCM
+    let cipher =
+        Aes256Gcm::new_from_slice(&aes_key).map_err(|_| EciesError::DecryptionFailed)?;
+    let nonce = Nonce::from_slice(iv);
+
+    let plaintext = cipher
+        .decrypt(nonce, encrypted_with_tag)
+        .map_err(|_| EciesError::DecryptionFailed)?;
+
+    String::from_utf8(plaintext).map_err(|_| EciesError::DecryptionFailed)
+}
+
+/// Encrypt data using the noble-secp256k1 compatible ECIES format
+///
+/// Format: ephemeralPubKey (65 bytes) || iv (12 bytes) || ciphertext || authTag (16 bytes)
+/// Key derivation: HKDF-SHA256(sharedX, salt="", info="", length=32)
+///
+/// # Arguments
+/// * `public_key` - The recipient's secp256k1 public key (33 or 65 bytes)
+/// * `plaintext` - The data to encrypt
+///
+/// # Returns
+/// The ciphertext as a hex string with 0x prefix
+pub fn encrypt_noble(public_key: &[u8], plaintext: &str) -> Result<String, EciesError> {
+    // Parse recipient's public key (accept both compressed and uncompressed)
+    let recipient_pk =
+        K256PublicKey::from_sec1_bytes(public_key).map_err(|_| EciesError::InvalidPublicKey)?;
+
+    // Generate ephemeral keypair
+    let ephemeral_sk = EphemeralSecret::random(&mut rand::thread_rng());
+    let ephemeral_pk = ephemeral_sk.public_key();
+
+    // Perform ECDH to get shared secret
+    let shared_secret = ephemeral_sk.diffie_hellman(&recipient_pk);
+    let shared_x = shared_secret.raw_secret_bytes();
+
+    // Derive AES key using HKDF-SHA256 with empty salt and empty info
+    let hk = Hkdf::<Sha256>::new(Some(&[]), shared_x);
+    let mut aes_key = [0u8; 32];
+    hk.expand(&[], &mut aes_key)
+        .map_err(|_| EciesError::EncryptionFailed)?;
+
+    // Generate random IV
+    let mut iv = [0u8; ECIES_IV_SIZE];
+    rand::thread_rng().fill_bytes(&mut iv);
+
+    // Encrypt with AES-256-GCM
+    let cipher =
+        Aes256Gcm::new_from_slice(&aes_key).map_err(|_| EciesError::EncryptionFailed)?;
+    let nonce = Nonce::from_slice(&iv);
+
+    let ciphertext_with_tag = cipher
+        .encrypt(nonce, plaintext.as_bytes())
+        .map_err(|_| EciesError::EncryptionFailed)?;
+
+    // Build output: ephemeralPubKey || iv || ciphertext || authTag
+    // Use uncompressed format (65 bytes starting with 0x04)
+    let ephemeral_pk_point = ephemeral_pk.to_encoded_point(false);
+    let ephemeral_pk_bytes = ephemeral_pk_point.as_bytes();
+    let mut result =
+        Vec::with_capacity(ECIES_PUBKEY_SIZE + ECIES_IV_SIZE + ciphertext_with_tag.len());
+    result.extend_from_slice(ephemeral_pk_bytes);
+    result.extend_from_slice(&iv);
+    result.extend_from_slice(&ciphertext_with_tag);
+
+    Ok(format!("0x{}", hex::encode(result)))
 }
 
 // ============================================================================
@@ -727,5 +867,87 @@ mod tests {
         let decrypted = decrypt_with_key(&key, &ciphertext).unwrap();
 
         assert_eq!(decrypted, plaintext);
+    }
+
+    // =========================================================================
+    // Noble-compatible ECIES tests (for JS interop)
+    // =========================================================================
+
+    #[test]
+    fn test_noble_ecies_roundtrip() {
+        // Generate a keypair using the standard method
+        let (sk_hex, pk_hex) = generate_keypair();
+        let sk = hex::decode(&sk_hex).unwrap();
+        let pk = hex::decode(&pk_hex).unwrap();
+
+        let plaintext = "server-prod-01";
+        let ciphertext = encrypt_noble(&pk, plaintext).unwrap();
+        let decrypted = decrypt_noble(&sk, &ciphertext).unwrap();
+
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_noble_ecies_ciphertext_format() {
+        let (_, pk_hex) = generate_keypair();
+        let pk = hex::decode(&pk_hex).unwrap();
+
+        let ciphertext = encrypt_noble(&pk, "test").unwrap();
+
+        // Should be hex-encoded with 0x prefix
+        assert!(ciphertext.starts_with("0x"));
+
+        // Decode and verify structure
+        let ct_bytes = hex::decode(ciphertext.strip_prefix("0x").unwrap()).unwrap();
+
+        // Should be at least: pubkey (65) + iv (12) + 1 byte + tag (16) = 94
+        assert!(ct_bytes.len() >= 94);
+
+        // First byte should be 0x04 (uncompressed public key marker)
+        assert_eq!(ct_bytes[0], 0x04);
+    }
+
+    #[test]
+    fn test_noble_ecies_with_compressed_pubkey() {
+        // Generate keypair and get compressed public key
+        let (sk_hex, pk_hex) = generate_keypair();
+        let sk = hex::decode(&sk_hex).unwrap();
+        let pk_uncompressed = hex::decode(&pk_hex).unwrap();
+
+        // Compress the public key (33 bytes: 0x02/0x03 prefix + x coordinate)
+        let pk = K256PublicKey::from_sec1_bytes(&pk_uncompressed).unwrap();
+        let pk_compressed = pk.to_sec1_bytes();
+        assert_eq!(pk_compressed.len(), 33);
+
+        // Encrypt with compressed key, should work
+        let plaintext = "test-compressed";
+        let ciphertext = encrypt_noble(&pk_compressed, plaintext).unwrap();
+        let decrypted = decrypt_noble(&sk, &ciphertext).unwrap();
+
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_noble_ecies_invalid_ciphertext_too_short() {
+        let (sk_hex, _) = generate_keypair();
+        let sk = hex::decode(&sk_hex).unwrap();
+
+        // Too short ciphertext
+        let result = decrypt_noble(&sk, "0xabcd");
+        assert!(matches!(result, Err(EciesError::InvalidCiphertext)));
+    }
+
+    #[test]
+    fn test_noble_ecies_json_data() {
+        // Test with JSON data (common use case)
+        let (sk_hex, pk_hex) = generate_keypair();
+        let sk = hex::decode(&sk_hex).unwrap();
+        let pk = hex::decode(&pk_hex).unwrap();
+
+        let json_plaintext = r#"{"hostname":"192.168.1.100","port":22,"username":"admin"}"#;
+        let ciphertext = encrypt_noble(&pk, json_plaintext).unwrap();
+        let decrypted = decrypt_noble(&sk, &ciphertext).unwrap();
+
+        assert_eq!(decrypted, json_plaintext);
     }
 }

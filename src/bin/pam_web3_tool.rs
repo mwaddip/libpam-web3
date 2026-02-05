@@ -46,12 +46,12 @@ USAGE:
     pam_web3_tool <COMMAND> [OPTIONS]
 
 COMMANDS:
-    generate-keypair        Generate a new secp256k1 keypair (for testing)
+    generate-keypair        Generate a new secp256k1 keypair
     encrypt-symmetric       Encrypt data with signature-derived AES-256-GCM key
     decrypt-symmetric       Decrypt data with signature-derived AES-256-GCM key
     derive-pubkey           Derive secp256k1 public key from private key
     wallet-encryption-key   Get x25519 encryption public key for a wallet (legacy)
-    decrypt                 Decrypt encrypted data (for testing)
+    decrypt                 Decrypt ECIES-encrypted data
     help                    Print this help message
 
 AUTHENTICATION MODEL (v0.4.0+):
@@ -69,8 +69,19 @@ ENCRYPTION SCHEME (user_encrypted):
     User signs decrypt_message → same signature → same key → decrypt
 
 EXAMPLES:
-    # Generate a new keypair (for testing)
+    # Generate a new keypair
     pam_web3_tool generate-keypair
+
+    # Decrypt ECIES data from signup page (noble format, default)
+    pam_web3_tool decrypt \
+        --private-key-file /etc/pam_web3/server.key \
+        --ciphertext <hex>
+
+    # Decrypt with explicit scheme
+    pam_web3_tool decrypt \
+        --scheme noble \
+        --private-key <hex> \
+        --ciphertext <hex>
 
     # Encrypt user field with signature-derived key
     pam_web3_tool encrypt-symmetric \
@@ -84,6 +95,13 @@ EXAMPLES:
 
     # Derive secp256k1 public key from private key
     pam_web3_tool derive-pubkey --private-key <hex>
+
+DECRYPT SCHEMES:
+    noble (default)  - Noble-compatible ECIES (HKDF-SHA256 empty salt/info, AES-256-GCM)
+                       Format: ephemeralPubKey[65] || iv[12] || ciphertext || authTag[16]
+                       Compatible with: @noble/secp256k1, blockhost-engine signup page
+    secp256k1        - ecies crate format (different HKDF parameters)
+    x25519           - MetaMask eth_decrypt format (NaCl crypto_box)
 "#
     );
 }
@@ -269,7 +287,8 @@ fn decrypt_data(args: &[String]) {
         i += 1;
     }
 
-    let scheme = scheme.unwrap_or_else(|| "secp256k1".to_string());
+    // Default to noble scheme (compatible with blockhost-engine signup page JavaScript)
+    let scheme = scheme.unwrap_or_else(|| "noble".to_string());
     let ciphertext = ciphertext.expect("--ciphertext is required");
 
     let private_key_hex = if let Some(file) = private_key_file {
@@ -290,13 +309,18 @@ fn decrypt_data(args: &[String]) {
         "secp256k1" | "ecies" => {
             ecies::decrypt(&private_key_bytes, &ciphertext).expect("Decryption failed")
         }
+        "noble" | "noble-secp256k1" => {
+            // Noble-compatible ECIES: HKDF-SHA256 with empty salt/info, AES-256-GCM
+            // Format: ephemeralPubKey (65 bytes) || iv (12 bytes) || ciphertext || authTag (16 bytes)
+            ecies::decrypt_noble(&private_key_bytes, &ciphertext).expect("Decryption failed")
+        }
         "x25519" | "eth_decrypt" | "nacl" => {
             ecies::decrypt_eth_encrypted(&private_key_bytes, &ciphertext)
                 .expect("Decryption failed")
         }
         _ => {
             eprintln!(
-                "Unknown scheme: {}. Use 'secp256k1' or 'x25519'",
+                "Unknown scheme: {}. Use 'secp256k1', 'noble', or 'x25519'",
                 scheme
             );
             process::exit(1);
