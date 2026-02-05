@@ -1,31 +1,40 @@
 # libpam-web3 Configuration - NFT Mode
 #
-# NFT-based authentication with blockchain verification and LDAP.
+# NFT-based authentication with blockchain verification.
 # Users sign an OTP with their wallet, the server verifies NFT ownership
-# via the blockchain, and looks up the username/revocation in LDAP.
+# via the blockchain, and maps token IDs to usernames via LDAP or /etc/passwd GECOS.
+#
+# Authentication model (v0.4.0+):
+# - Wallet ownership: User signs OTP to prove wallet control
+# - NFT ownership: Token ID matches GECOS entry (format: nft=TOKEN_ID)
+# - No server private key needed - authentication is purely ownership-based
 #
 # Requires:
 # - Build with: cargo build --release --features nft
 # - Running web3-auth-svc daemon
-# - LDAP server with NFT entries
+# - LDAP server OR /etc/passwd GECOS entries mapping token IDs to users
 #
 # Copy to /etc/pam_web3/config.toml
 
 [machine]
-# Unique identifier for this machine
-# This is encrypted in the NFT and must match exactly
+# Unique identifier for this machine (shown when signing)
 id = "server-prod-01"
 
-# Path to machine's ECIES private key (32 bytes hex)
-# Generate with: pam_web3_tool generate-keypair
-private_key_file = "/etc/pam_web3/server.key"
+# Secret key for OTP HMAC (32 bytes hex)
+# Generate with: openssl rand -hex 32
+secret_key = "0x<your-64-char-hex-key>"
 
 [auth]
 # Authentication mode: "wallet" or "nft"
 mode = "nft"
 
-# URL to the signing page
+# URL to the signing page (set by cloud-init after obtaining SSL cert)
 signing_url = "https://auth.example.com/verify"
+
+# NFT lookup method: "ldap" or "passwd"
+# - ldap: Query LDAP for token ID -> username mapping and revocation
+# - passwd: Check /etc/passwd GECOS field for "nft=TOKEN_ID"
+nft_lookup = "passwd"
 
 # OTP settings
 otp_length = 6
@@ -42,6 +51,7 @@ nft_contract = "0x1234567890abcdef1234567890abcdef12345678"  # AccessCredentialN
 # Request timeout
 timeout_seconds = 10
 
+# LDAP configuration (only required when nft_lookup = "ldap")
 [ldap]
 # LDAP server for NFT validation and username lookup
 server = "ldap://localhost:389"
