@@ -1,12 +1,28 @@
 #!/bin/bash
-# Build script to minify and base64 encode the signing page
-# Output can be used as the animation_url in NFT metadata
+#
+# Build script to minify and base64 encode the signing page for NFT minting
+#
+# IMPORTANT: Output Format
+# ========================
+# This script outputs TWO files:
+#   - signing-page.b64     : Raw base64 (for NFT contract mint() function)
+#   - signing-page.datauri : Full data URI (for direct use in JSON metadata)
+#
+# The NFT contract's mint() function expects ONLY the raw base64 content.
+# The contract's tokenURI() automatically prepends "data:text/html;base64,"
+# when generating the metadata JSON.
+#
+# Usage:
+#   For NFT minting (CLI/scripts):  Use signing-page.b64 (raw base64)
+#   For direct metadata JSON:        Use signing-page.datauri (full data URI)
+#
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INPUT="$SCRIPT_DIR/index.html"
-OUTPUT="$SCRIPT_DIR/signing-page.b64"
+OUTPUT_B64="$SCRIPT_DIR/signing-page.b64"
+OUTPUT_DATAURI="$SCRIPT_DIR/signing-page.datauri"
 
 # Check if input exists
 if [ ! -f "$INPUT" ]; then
@@ -31,17 +47,28 @@ minify_html() {
 MINIFIED=$(cat "$INPUT" | minify_html)
 ENCODED=$(echo -n "$MINIFIED" | base64 -w 0)
 
-# Output the data URI
-DATA_URI="data:text/html;base64,$ENCODED"
+# Output raw base64 (for NFT contract mint())
+echo -n "$ENCODED" > "$OUTPUT_B64"
 
-echo "$DATA_URI" > "$OUTPUT"
+# Output full data URI (for direct JSON metadata use)
+DATA_URI="data:text/html;base64,$ENCODED"
+echo "$DATA_URI" > "$OUTPUT_DATAURI"
 
 # Show stats
 ORIGINAL_SIZE=$(wc -c < "$INPUT")
-ENCODED_SIZE=${#DATA_URI}
+B64_SIZE=${#ENCODED}
+DATAURI_SIZE=${#DATA_URI}
 
-echo "Original size: $ORIGINAL_SIZE bytes"
-echo "Data URI size: $ENCODED_SIZE bytes"
-echo "Output saved to: $OUTPUT"
+echo "Original size:  $ORIGINAL_SIZE bytes"
+echo "Base64 size:    $B64_SIZE bytes"
+echo "Data URI size:  $DATAURI_SIZE bytes"
 echo ""
-echo "Use this as the 'animation_url' in your NFT metadata."
+echo "Output files:"
+echo "  $OUTPUT_B64"
+echo "      -> Raw base64 for NFT contract mint() animationUrlBase64 parameter"
+echo ""
+echo "  $OUTPUT_DATAURI"
+echo "      -> Full data URI for direct use in JSON metadata"
+echo ""
+echo "IMPORTANT: The NFT contract expects RAW BASE64 (signing-page.b64)."
+echo "           The contract's tokenURI() adds the 'data:text/html;base64,' prefix."

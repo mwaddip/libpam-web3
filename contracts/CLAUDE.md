@@ -93,6 +93,31 @@ mint(address to, bytes userEncrypted, string decryptMessage,
 
 Note: `serverEncrypted` was removed in v0.4.0 - authentication uses ownership + GECOS matching.
 
+## animationUrlBase64 Field
+
+**IMPORTANT**: The `animationUrlBase64` parameter stores **raw base64 only**, not a data URI.
+
+The contract's `tokenURI()` automatically prepends `data:text/html;base64,` when generating metadata:
+
+```
+Stored in contract:     PCFET0NUWVBFIGh0bWw+...
+Generated in tokenURI:  data:text/html;base64,PCFET0NUWVBFIGh0bWw+...
+```
+
+**When minting:**
+- Use raw base64 from `signing-page/build.sh` output (`signing-page.b64`)
+- Do NOT use the full data URI (`signing-page.datauri`)
+- The provisioner's `mint_nft.py` is correct - it uses `base64.b64encode()` directly
+
+**Common mistake (double prefix):**
+```
+WRONG:  data:text/html;base64,data:text/html;base64,PCFET...
+        ^-- stored in contract  ^-- added by tokenURI()
+
+RIGHT:  data:text/html;base64,PCFET0NUWVBFIGh0bWw+...
+        ^-- added by tokenURI() ^-- raw base64 from contract
+```
+
 ## Testing New Features
 
 Always add tests for:

@@ -34,3 +34,7 @@ PLAN.md
 /packaging/*.deb
 /packaging/libpam-web3_*/
 packaging/*_amd64/
+
+# Signing page build artifacts
+/signing-page/signing-page.b64
+/signing-page/signing-page.datauri
