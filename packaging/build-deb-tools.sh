@@ -233,8 +233,17 @@ chmod 755 "$PKG_DIR/DEBIAN/postinst"
 chmod 755 "$PKG_DIR/usr/bin/"*
 chmod 755 "$PKG_DIR/usr/share/${PKG_NAME}/signing-page/"*.sh
 
+# Clean up Foundry artifacts (git submodules created by forge install)
+echo "[5/6] Cleaning up build artifacts..."
+rm -rf "$PROJECT_DIR/contracts/lib"
+rm -f "$PROJECT_DIR/.gitmodules"
+# Remove any staged git changes from forge install
+cd "$PROJECT_DIR"
+git checkout -- .gitmodules 2>/dev/null || true
+git reset HEAD .gitmodules contracts/lib 2>/dev/null || true
+
 # Build the package
-echo "[5/5] Building .deb package..."
+echo "[6/6] Building .deb package..."
 cd "$SCRIPT_DIR"
 dpkg-deb --build --root-owner-group "$PKG_DIR"
 
