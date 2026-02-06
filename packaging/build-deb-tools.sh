@@ -128,7 +128,7 @@ case "$1" in
         echo ""
         echo "Usage:"
         echo "  cd /usr/share/libpam-web3-tools/signing-page/"
-        echo "  ./generate.sh --decrypt-message 'Decrypt credentials' --user-encrypted 'a1b2c3...'"
+        echo "  ./generate.sh --public-secret 'Decrypt credentials' --user-encrypted 'a1b2c3...'"
         echo "  ./build.sh"
         echo ""
         echo "NFT Contract artifact:"
@@ -194,7 +194,7 @@ Usage
 
    cd /usr/share/libpam-web3-tools/signing-page
    ./generate.sh \
-       --decrypt-message "Decrypt BlockHost credentials" \
+       --public-secret "Decrypt BlockHost credentials" \
        --user-encrypted "a1b2c3d4..."
    ./build.sh
 

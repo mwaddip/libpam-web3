@@ -66,7 +66,7 @@ AUTHENTICATION MODEL (v0.4.0+):
 ENCRYPTION SCHEME (user_encrypted):
     AES-256-GCM with signature-derived key
     Key = keccak256(user_signature)
-    User signs decrypt_message → same signature → same key → decrypt
+    User signs public_secret → same signature → same key → decrypt
 
 EXAMPLES:
     # Generate a new keypair

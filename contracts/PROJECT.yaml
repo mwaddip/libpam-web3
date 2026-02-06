@@ -62,7 +62,7 @@ user_encryption:
   purpose: |
     The userEncrypted field is OPTIONAL and exists purely for user convenience.
     It allows storing connection details (hostname, etc.) that only the NFT
-    holder can decrypt by re-signing the deterministic decryptMessage.
+    holder can decrypt by re-signing the deterministic publicSecret.
 
   fields:
     userEncrypted:
@@ -71,9 +71,9 @@ user_encryption:
       algorithm: AES-GCM with signature-derived key
       contains: Hostname, connection details, or any user-specific data
       encrypted_by: Client-side JavaScript at signup
-      decrypted_by: User re-signing decryptMessage to derive key
+      decrypted_by: User re-signing publicSecret to derive key
 
-    decryptMessage:
+    publicSecret:
       type: string
       format: "libpam-web3:<checksumAddress>:<nonce>"
       purpose: Deterministic message user signs to derive decryption key
@@ -99,7 +99,7 @@ contract:
           type: bytes
           description: Optional connection details encrypted for user
 
-        - name: decryptMessage
+        - name: publicSecret
           type: string
           description: Deterministic message for key derivation
           format: "libpam-web3:<checksumAddress>:<nonce>"
@@ -138,7 +138,7 @@ contract:
           type: bytes
           description: Optional encrypted connection details (can be empty)
 
-        - name: decryptMessage
+        - name: publicSecret
           type: string
           description: Message for key derivation
 
@@ -189,7 +189,7 @@ contract:
     getAccessData:
       visibility: external
       view: true
-      returns: [userEncrypted, decryptMessage, issuedAt, expiresAt]
+      returns: [userEncrypted, publicSecret, issuedAt, expiresAt]
       description: Retrieve access data for a token
 
     isExpired:
@@ -238,7 +238,7 @@ token_uri:
         value: "<expiresAt timestamp>"
     access:
       user_encrypted: "0x<hex>"
-      decrypt_message: "<decryptMessage string>"
+      public_secret: "<publicSecret string>"
 
 # =============================================================================
 # DEVELOPMENT

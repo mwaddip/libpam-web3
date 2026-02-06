@@ -65,7 +65,7 @@ Authentication relies on:
 
 **Optional `userEncrypted` field:**
 - Stores connection details (hostname, etc.) encrypted with signature-derived key
-- Only the NFT holder can decrypt by re-signing the deterministic `decryptMessage`
+- Only the NFT holder can decrypt by re-signing the deterministic `publicSecret`
 - Purely for user convenience - authentication works without it
 
 ## Architecture Boundaries
@@ -86,7 +86,7 @@ This contract is ONE component of a larger system:
 
 Current `mint()` signature (v0.4.0):
 ```solidity
-mint(address to, bytes userEncrypted, string decryptMessage,
+mint(address to, bytes userEncrypted, string publicSecret,
      string description, string imageUri, string animationUrlBase64,
      uint256 expiresAt)
 ```

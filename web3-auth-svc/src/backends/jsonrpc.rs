@@ -163,8 +163,8 @@ impl JsonRpcBackend {
                     .get("user_encrypted")
                     .and_then(|u| u.as_str())
                     .map(|s| s.to_string()),
-                decrypt_message: a
-                    .get("decrypt_message")
+                public_secret: a
+                    .get("public_secret")
                     .and_then(|d| d.as_str())
                     .map(|s| s.to_string()),
             })

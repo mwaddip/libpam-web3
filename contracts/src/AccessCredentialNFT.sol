@@ -28,12 +28,12 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
         bytes userEncrypted;
         /// @notice Deterministic message for re-signing to derive decryption key
         /// Format: "libpam-web3:<checksumAddress>:<nonce>"
-        string decryptMessage;
+        string publicSecret;
         /// @notice Human-readable description (e.g., "Production Server Access")
         string description;
         /// @notice Optional image URI (IPFS or HTTPS)
         string imageUri;
-        /// @notice Signing page HTML (base64-encoded) with embedded userEncrypted and decryptMessage
+        /// @notice Signing page HTML (base64-encoded) with embedded userEncrypted and publicSecret
         string animationUrlBase64;
         /// @notice Timestamp when the credential was issued
         uint256 issuedAt;
@@ -73,7 +73,7 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
      * @notice Mint a new access credential NFT
      * @param to Recipient address (the user who will use this credential)
      * @param userEncrypted Connection details encrypted with signature-derived key (optional)
-     * @param decryptMessage Deterministic message for re-signing to derive decryption key
+     * @param publicSecret Deterministic message for re-signing to derive decryption key
      * @param description Human-readable description
      * @param imageUri Custom image URI (pass empty string to use default)
      * @param animationUrlBase64 Signing page HTML (base64-encoded, required for decryption UI)
@@ -83,7 +83,7 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
     function mint(
         address to,
         bytes calldata userEncrypted,
-        string calldata decryptMessage,
+        string calldata publicSecret,
         string calldata description,
         string calldata imageUri,
         string calldata animationUrlBase64,
@@ -93,7 +93,7 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
 
         _accessData[tokenId] = AccessData({
             userEncrypted: userEncrypted,
-            decryptMessage: decryptMessage,
+            publicSecret: publicSecret,
             description: description,
             imageUri: imageUri,
             animationUrlBase64: animationUrlBase64,
@@ -110,7 +110,7 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
      * @notice Batch mint multiple credentials
      * @param recipients Array of recipient addresses
      * @param userEncryptedArray Array of user-encrypted connection details (optional per token)
-     * @param decryptMessages Array of deterministic messages for decryption
+     * @param publicSecrets Array of deterministic messages for decryption
      * @param descriptions Array of descriptions
      * @param imageUris Array of image URIs
      * @param animationUrlBase64s Array of signing pages (base64-encoded, required for decryption UI)
@@ -120,7 +120,7 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
     function mintBatch(
         address[] calldata recipients,
         bytes[] calldata userEncryptedArray,
-        string[] calldata decryptMessages,
+        string[] calldata publicSecrets,
         string[] calldata descriptions,
         string[] calldata imageUris,
         string[] calldata animationUrlBase64s,
@@ -129,7 +129,7 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
         uint256 length = recipients.length;
         require(
             userEncryptedArray.length == length &&
-            decryptMessages.length == length &&
+            publicSecrets.length == length &&
             descriptions.length == length &&
             imageUris.length == length &&
             animationUrlBase64s.length == length &&
@@ -145,7 +145,7 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
 
             _accessData[tokenId] = AccessData({
                 userEncrypted: userEncryptedArray[i],
-                decryptMessage: decryptMessages[i],
+                publicSecret: publicSecrets[i],
                 description: descriptions[i],
                 imageUri: imageUris[i],
                 animationUrlBase64: animationUrlBase64s[i],
@@ -214,13 +214,13 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
      * @notice Get the access data for a token
      * @param tokenId The token ID
      * @return userEncrypted The user-encrypted connection details
-     * @return decryptMessage The deterministic message for decryption
+     * @return publicSecret The deterministic message for decryption
      * @return issuedAt When the credential was issued
      * @return expiresAt When the credential expires (0 = never)
      */
     function getAccessData(uint256 tokenId) external view returns (
         bytes memory userEncrypted,
-        string memory decryptMessage,
+        string memory publicSecret,
         uint256 issuedAt,
         uint256 expiresAt
     ) {
@@ -228,7 +228,7 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
         AccessData storage data = _accessData[tokenId];
         return (
             data.userEncrypted,
-            data.decryptMessage,
+            data.publicSecret,
             data.issuedAt,
             data.expiresAt
         );
@@ -263,8 +263,8 @@ contract AccessCredentialNFT is ERC721, ERC721Enumerable, Ownable {
         string memory accessJson = string(abi.encodePacked(
             '{"user_encrypted":"0x',
             _bytesToHex(data.userEncrypted),
-            '","decrypt_message":"',
-            data.decryptMessage,
+            '","public_secret":"',
+            data.publicSecret,
             '"}'
         ));
 

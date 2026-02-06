@@ -12,7 +12,7 @@ contract AccessCredentialNFTTest is Test {
 
     // Sample encrypted data (in real usage, this would be AES-GCM ciphertext)
     bytes public sampleUserEncrypted = hex"04fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
-    string public sampleDecryptMessage = "libpam-web3:0x1234567890abcdef1234567890abcdef12345678:12345";
+    string public samplePublicSecret = "libpam-web3:0x1234567890abcdef1234567890abcdef12345678:12345";
 
     string public sampleSigningPage = "PCFET0NUWVBFIGh0bWw+PGh0bWw+PGhlYWQ+PC9oZWFkPjxib2R5PjxoMT5UZXN0PC9oMT48L2JvZHk+PC9odG1sPg==";
     string public defaultImageUri = "ipfs://QmTestImageHash";
@@ -51,7 +51,7 @@ contract AccessCredentialNFTTest is Test {
         uint256 tokenId = nft.mint(
             user1,
             sampleUserEncrypted,
-            sampleDecryptMessage,
+            samplePublicSecret,
             "Test Server Access",
             "",
             "",
@@ -69,7 +69,7 @@ contract AccessCredentialNFTTest is Test {
         uint256 tokenId = nft.mint(
             user1,
             sampleUserEncrypted,
-            sampleDecryptMessage,
+            samplePublicSecret,
             "Temporary Access",
             "",
             "",
@@ -90,7 +90,7 @@ contract AccessCredentialNFTTest is Test {
         nft.mint(
             user1,
             sampleUserEncrypted,
-            sampleDecryptMessage,
+            samplePublicSecret,
             "Test",
             "",
             "",
@@ -103,7 +103,7 @@ contract AccessCredentialNFTTest is Test {
         uint256 tokenId = nft.mint(
             user1,
             "", // Empty user encrypted data is fine
-            sampleDecryptMessage,
+            samplePublicSecret,
             "Test",
             "",
             "",
@@ -125,10 +125,10 @@ contract AccessCredentialNFTTest is Test {
         userEncryptedArray[1] = sampleUserEncrypted;
         userEncryptedArray[2] = sampleUserEncrypted;
 
-        string[] memory decryptMessages = new string[](3);
-        decryptMessages[0] = sampleDecryptMessage;
-        decryptMessages[1] = sampleDecryptMessage;
-        decryptMessages[2] = sampleDecryptMessage;
+        string[] memory publicSecrets = new string[](3);
+        publicSecrets[0] = samplePublicSecret;
+        publicSecrets[1] = samplePublicSecret;
+        publicSecrets[2] = samplePublicSecret;
 
         string[] memory descriptions = new string[](3);
         descriptions[0] = "Server 1";
@@ -153,7 +153,7 @@ contract AccessCredentialNFTTest is Test {
         uint256[] memory tokenIds = nft.mintBatch(
             recipients,
             userEncryptedArray,
-            decryptMessages,
+            publicSecrets,
             descriptions,
             imageUris,
             animationUrls,
@@ -172,7 +172,7 @@ contract AccessCredentialNFTTest is Test {
         uint256 tokenId = nft.mint(
             user1,
             sampleUserEncrypted,
-            sampleDecryptMessage,
+            samplePublicSecret,
             "Test Server",
             "",
             "",
@@ -181,13 +181,13 @@ contract AccessCredentialNFTTest is Test {
 
         (
             bytes memory userEncrypted,
-            string memory decryptMessage,
+            string memory publicSecret,
             uint256 issuedAt,
             uint256 expiresAt
         ) = nft.getAccessData(tokenId);
 
         assertEq(userEncrypted, sampleUserEncrypted);
-        assertEq(decryptMessage, sampleDecryptMessage);
+        assertEq(publicSecret, samplePublicSecret);
         assertEq(issuedAt, block.timestamp);
         assertEq(expiresAt, 0);
     }
@@ -196,7 +196,7 @@ contract AccessCredentialNFTTest is Test {
         uint256 tokenId = nft.mint(
             user1,
             sampleUserEncrypted,
-            sampleDecryptMessage,
+            samplePublicSecret,
             "Test Server",
             "",
             "",
@@ -219,7 +219,7 @@ contract AccessCredentialNFTTest is Test {
         uint256 tokenId = nft.mint(
             user1,
             sampleUserEncrypted,
-            sampleDecryptMessage,
+            samplePublicSecret,
             "Test Server",
             "",
             "",
@@ -237,7 +237,7 @@ contract AccessCredentialNFTTest is Test {
         uint256 tokenId = nft.mint(
             user1,
             sampleUserEncrypted,
-            sampleDecryptMessage,
+            samplePublicSecret,
             "Production Server Access",
             "ipfs://QmCustomImage",
             "",
@@ -255,7 +255,7 @@ contract AccessCredentialNFTTest is Test {
         uint256 tokenId = nft.mint(
             user1,
             sampleUserEncrypted,
-            sampleDecryptMessage,
+            samplePublicSecret,
             "Test Server",
             "", // No custom image
             "", // No custom animation URL
@@ -268,10 +268,10 @@ contract AccessCredentialNFTTest is Test {
 
     function testEnumerable() public {
         // Mint several tokens to user1
-        nft.mint(user1, sampleUserEncrypted, sampleDecryptMessage, "Server 1", "", "", 0);
-        nft.mint(user1, sampleUserEncrypted, sampleDecryptMessage, "Server 2", "", "", 0);
-        nft.mint(user2, sampleUserEncrypted, sampleDecryptMessage, "Server 3", "", "", 0);
-        nft.mint(user1, sampleUserEncrypted, sampleDecryptMessage, "Server 4", "", "", 0);
+        nft.mint(user1, sampleUserEncrypted, samplePublicSecret, "Server 1", "", "", 0);
+        nft.mint(user1, sampleUserEncrypted, samplePublicSecret, "Server 2", "", "", 0);
+        nft.mint(user2, sampleUserEncrypted, samplePublicSecret, "Server 3", "", "", 0);
+        nft.mint(user1, sampleUserEncrypted, samplePublicSecret, "Server 4", "", "", 0);
 
         assertEq(nft.totalSupply(), 4);
         assertEq(nft.balanceOf(user1), 3);
@@ -288,7 +288,7 @@ contract AccessCredentialNFTTest is Test {
         uint256 tokenId = nft.mint(
             user1,
             sampleUserEncrypted,
-            sampleDecryptMessage,
+            samplePublicSecret,
             "Test Server",
             "",
             "",
@@ -317,7 +317,7 @@ contract AccessCredentialNFTTest is Test {
         uint256 tokenId1 = nft.mint(
             user1,
             sampleUserEncrypted,
-            sampleDecryptMessage,
+            samplePublicSecret,
             "Test Server 1",
             "",
             signingPage1,
@@ -327,7 +327,7 @@ contract AccessCredentialNFTTest is Test {
         uint256 tokenId2 = nft.mint(
             user1,
             sampleUserEncrypted,
-            sampleDecryptMessage,
+            samplePublicSecret,
             "Test Server 2",
             "",
             signingPage2,
@@ -349,7 +349,7 @@ contract AccessCredentialNFTTest is Test {
         uint256 tokenId = nft.mint(
             user1,
             sampleUserEncrypted,
-            sampleDecryptMessage,
+            samplePublicSecret,
             "Test Server",
             "",
             sampleSigningPage,
@@ -367,7 +367,7 @@ contract AccessCredentialNFTTest is Test {
         uint256 tokenId = nft.mint(
             user1,
             sampleUserEncrypted,
-            sampleDecryptMessage,
+            samplePublicSecret,
             "Test Server",
             "",
             initialPage,
@@ -393,7 +393,7 @@ contract AccessCredentialNFTTest is Test {
         uint256 tokenId = nft.mint(
             user1,
             sampleUserEncrypted,
-            sampleDecryptMessage,
+            samplePublicSecret,
             "Test Server",
             "",
             sampleSigningPage,

@@ -124,7 +124,7 @@ cast wallet sign "Authenticate to my-server with code: 123456" --private-key $WA
 
 ### Decrypting Connection Details from NFT
 
-NFTs can store encrypted connection details (hostname, port) that only the wallet owner can decrypt. The encryption uses AES-256-GCM with a key derived from signing the `decrypt_message`.
+NFTs can store encrypted connection details (hostname, port) that only the wallet owner can decrypt. The encryption uses AES-256-GCM with a key derived from signing the `public_secret`.
 
 #### Python Example
 
@@ -157,13 +157,13 @@ def get_connection_info(contract_address, token_id, private_key, rpc_url):
     # 3. Extract encrypted data and decrypt message
     access = metadata.get("access", {})
     user_encrypted = access.get("user_encrypted", "")  # hex string
-    decrypt_message = access.get("decrypt_message", "")
+    public_secret = access.get("public_secret", "")
 
-    if not user_encrypted or not decrypt_message:
+    if not user_encrypted or not public_secret:
         raise ValueError("NFT has no encrypted connection details")
 
     # 4. Sign the decrypt message to derive the key
-    signable = encode_defunct(text=decrypt_message)
+    signable = encode_defunct(text=public_secret)
     signed = Account.sign_message(signable, private_key=private_key)
 
     # 5. Derive AES key: keccak256(signature)
@@ -211,10 +211,10 @@ async function getConnectionInfo(contractAddress, tokenId, privateKey, rpcUrl) {
   const metadata = JSON.parse(json);
 
   // 3. Get encrypted data
-  const { user_encrypted, decrypt_message } = metadata.access;
+  const { user_encrypted, public_secret } = metadata.access;
 
   // 4. Sign to derive key
-  const signature = await wallet.signMessage(decrypt_message);
+  const signature = await wallet.signMessage(public_secret);
   const key = Buffer.from(keccak256(signature).slice(2), 'hex');
 
   // 5. Decrypt

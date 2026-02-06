@@ -16,7 +16,7 @@ Browser-based wallet signing interface for libpam-web3 authentication. Can be em
 
 ```bash
 ./generate.sh \
-    --decrypt-message "Decrypt BlockHost credentials" \
+    --public-secret "Decrypt BlockHost credentials" \
     --user-encrypted "0xa1b2c3d4..."
 ```
 
@@ -83,14 +83,14 @@ The signing page provides two functions:
 - Copies signature to clipboard for pasting into terminal
 
 ### Decrypt Access Tab
-- Pre-filled with `decryptMessage` and `userEncrypted` from NFT
+- Pre-filled with `publicSecret` and `userEncrypted` from NFT
 - User signs decrypt message to derive AES key
 - Decrypts and displays connection details (hostname, port, etc.)
 
 ## Encryption Scheme
 
 The decrypt functionality uses:
-- **Key derivation**: `keccak256(signature)` where signature is from signing `decryptMessage`
+- **Key derivation**: `keccak256(signature)` where signature is from signing `publicSecret`
 - **Encryption**: AES-256-GCM
 - **Format**: `iv (12 bytes) || ciphertext || authTag (16 bytes)`
 

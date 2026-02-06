@@ -53,8 +53,8 @@ contract MintCredential is Script {
         bytes memory userEncrypted = vm.envOr("USER_ENCRYPTED", bytes(""));
 
         // Decrypt message for signature-derived decryption
-        string memory decryptMessage = vm.envOr(
-            "DECRYPT_MESSAGE",
+        string memory publicSecret = vm.envOr(
+            "PUBLIC_SECRET",
             string("")
         );
 
@@ -72,7 +72,7 @@ contract MintCredential is Script {
         uint256 tokenId = nft.mint(
             recipient,
             userEncrypted,
-            decryptMessage,
+            publicSecret,
             description,
             imageUri,
             animationUrlBase64,

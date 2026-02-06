@@ -345,7 +345,7 @@ cli_tools:
     scripts:
       generate.sh:
         description: Generate signing page with embedded config
-        usage: ./generate.sh --server-pubkey "04..." --decrypt-message "Decrypt credentials"
+        usage: ./generate.sh --server-pubkey "04..." --public-secret "Decrypt credentials"
         output: index.html with config values injected
       build.sh:
         description: Minify and base64 encode signing page
@@ -376,7 +376,7 @@ smart_contract:
     parameters:
       - to: Recipient wallet address
       - userEncrypted: AES-GCM encrypted connection details (signature-derived key)
-      - decryptMessage: Message user signs to derive decryption key
+      - publicSecret: Message user signs to derive decryption key
       - description: Token description
       - imageUri: Image URI (ipfs:// or data:)
       - animationUrlBase64: Signing page HTML (base64). Empty string for contract default.
@@ -451,12 +451,12 @@ changelog:
           Use updateAnimationUrl(tokenId, newAnimationUrlBase64) for per-token updates.
       - component: signing_page
         change: |
-          generate.sh now takes --user-encrypted and --decrypt-message parameters.
-          Old: ./generate.sh --server-pubkey <hex> --decrypt-message <msg>
-          New: ./generate.sh --decrypt-message <msg> --user-encrypted <hex>
+          generate.sh now takes --user-encrypted and --public-secret parameters.
+          Old: ./generate.sh --server-pubkey <hex> --public-secret <msg>
+          New: ./generate.sh --public-secret <msg> --user-encrypted <hex>
           Each minted NFT has its own signing page with embedded credentials.
     new_features:
-      - Signing page generator embeds userEncrypted and decryptMessage as read-only fields
+      - Signing page generator embeds userEncrypted and publicSecret as read-only fields
       - AccessCredentialNFT.sol and ABI included in libpam-web3-tools package
 
   - version: "0.4.0"

@@ -141,7 +141,7 @@ cd signing-page/
 # Generate HTML with server pubkey and decrypt message
 ./generate.sh \
     --server-pubkey "04a1b2c3..." \
-    --decrypt-message "Decrypt BlockHost credentials"
+    --public-secret "Decrypt BlockHost credentials"
 
 # Base64 encode for NFT animationUrlBase64 parameter
 ./build.sh
@@ -230,5 +230,5 @@ Authentication Flow:
 
 **Optional `userEncrypted` field:**
 - Stores connection details encrypted with signature-derived key (AES-GCM)
-- Only the NFT holder can decrypt by re-signing the `decryptMessage`
+- Only the NFT holder can decrypt by re-signing the `publicSecret`
 - Purely for user convenience - authentication works without it

@@ -58,7 +58,7 @@ pub struct NftMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessData {
     pub user_encrypted: Option<String>,
-    pub decrypt_message: Option<String>,
+    pub public_secret: Option<String>,
 }
 
 /// Trait for blockchain data backends

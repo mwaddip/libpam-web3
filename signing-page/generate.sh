@@ -2,7 +2,7 @@
 # Generate a signing page with pre-filled decrypt credentials
 #
 # Usage:
-#   ./generate.sh --decrypt-message <message> --user-encrypted <hex> [--output <file>]
+#   ./generate.sh --public-secret <message> --user-encrypted <hex> [--output <file>]
 #
 # This creates an index.html with the values embedded, ready for build.sh
 
@@ -11,14 +11,14 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT="$SCRIPT_DIR/index.html"
 
-DECRYPT_MESSAGE=""
+PUBLIC_SECRET=""
 USER_ENCRYPTED=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        -m|--decrypt-message)
-            DECRYPT_MESSAGE="$2"
+        -m|--public-secret)
+            PUBLIC_SECRET="$2"
             shift 2
             ;;
         -e|--user-encrypted)
@@ -30,10 +30,10 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -h|--help)
-            echo "Usage: $0 --decrypt-message <message> --user-encrypted <hex>"
+            echo "Usage: $0 --public-secret <message> --user-encrypted <hex>"
             echo ""
             echo "Options:"
-            echo "  -m, --decrypt-message  Message user signs to derive decryption key"
+            echo "  -m, --public-secret  Message user signs to derive decryption key"
             echo "  -e, --user-encrypted   Encrypted connection details (hex)"
             echo "  -o, --output           Output file (default: index.html)"
             echo "  -h, --help             Show this help"
@@ -51,8 +51,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Check required parameters
-if [ -z "$DECRYPT_MESSAGE" ]; then
-    echo "Error: --decrypt-message is required"
+if [ -z "$PUBLIC_SECRET" ]; then
+    echo "Error: --public-secret is required"
     exit 1
 fi
 
@@ -66,7 +66,7 @@ escape_sed() {
     echo "$1" | sed 's/[&/\]/\\&/g'
 }
 
-DECRYPT_MESSAGE_ESC=$(escape_sed "$DECRYPT_MESSAGE")
+PUBLIC_SECRET_ESC=$(escape_sed "$PUBLIC_SECRET")
 USER_ENCRYPTED_ESC=$(escape_sed "$USER_ENCRYPTED")
 
 cat > "$OUTPUT" << 'HTMLEOF'
@@ -172,7 +172,7 @@ button{width:100%;padding:12px;border:none;border-radius:8px;font-size:1rem;curs
 <script>
 (function(){
 const CONFIG={
-    decryptMessage:'__DECRYPT_MESSAGE__',
+    publicSecret:'__PUBLIC_SECRET__',
     userEncrypted:'__USER_ENCRYPTED__'
 };
 
@@ -193,8 +193,8 @@ document.querySelectorAll('.tab').forEach(tab=>{
 });
 
 // Pre-fill decrypt fields if configured (and make read-only)
-if(CONFIG.decryptMessage && CONFIG.decryptMessage !== '__DECRYPT_MESSAGE__'){
-    $('decrypt-msg').value = CONFIG.decryptMessage;
+if(CONFIG.publicSecret && CONFIG.publicSecret !== '__PUBLIC_SECRET__'){
+    $('decrypt-msg').value = CONFIG.publicSecret;
     $('decrypt-msg').readOnly = true;
     $('decrypt-msg').style.opacity = '0.7';
 }
@@ -393,11 +393,11 @@ if(window.ethereum&&window.ethereum.selectedAddress){
 HTMLEOF
 
 # Replace placeholders with actual values
-sed -i "s|__DECRYPT_MESSAGE__|$DECRYPT_MESSAGE_ESC|g" "$OUTPUT"
+sed -i "s|__PUBLIC_SECRET__|$PUBLIC_SECRET_ESC|g" "$OUTPUT"
 sed -i "s|__USER_ENCRYPTED__|$USER_ENCRYPTED_ESC|g" "$OUTPUT"
 
 echo "Generated: $OUTPUT"
-echo "Decrypt message: $DECRYPT_MESSAGE"
+echo "Public secret: $PUBLIC_SECRET"
 echo "User encrypted:  ${USER_ENCRYPTED:0:40}..."
 echo ""
 echo "Run ./build.sh to create base64-encoded version for NFT minting."

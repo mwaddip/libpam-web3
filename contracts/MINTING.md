@@ -13,14 +13,14 @@ When a user purchases VM access, they provide a signature that will later let th
 │                                                                              │
 │  User (Browser)                    Subscription Manager         Blockchain   │
 │       │                                    │                        │        │
-│       │ 1. Sign decryptMessage             │                        │        │
+│       │ 1. Sign publicSecret               │                        │        │
 │       │    with wallet                     │                        │        │
 │       │                                    │                        │        │
 │       │ 2. Encrypt signature with          │                        │        │
 │       │    server public key (ECIES)       │                        │        │
 │       │                                    │                        │        │
 │       │──── encryptedSignature ───────────>│                        │        │
-│       │     + decryptMessage               │                        │        │
+│       │     + publicSecret                 │                        │        │
 │       │     + wallet address               │                        │        │
 │       │                                    │                        │        │
 │       │                           3. Decrypt signature              │        │
@@ -68,10 +68,10 @@ The signing page handles this automatically. For reference:
 
 ```javascript
 // 1. User signs the decrypt message
-const decryptMessage = "Decrypt BlockHost credentials";
+const publicSecret = "Decrypt BlockHost credentials";
 const signature = await ethereum.request({
     method: 'personal_sign',
-    params: [decryptMessage, walletAddress]
+    params: [publicSecret, walletAddress]
 });
 
 // 2. Encrypt signature with server's public key (ECIES)
@@ -85,7 +85,7 @@ const encryptedSignature = await EthCrypto.encryptWithPublicKey(
 await fetch('/api/provision', {
     body: JSON.stringify({
         walletAddress,
-        decryptMessage,
+        publicSecret,
         encryptedSignature: EthCrypto.cipher.stringify(encryptedSignature)
     })
 });
@@ -232,7 +232,7 @@ Call the contract's `mint()` function with the encrypted data.
 function mint(
     address to,
     bytes calldata userEncrypted,
-    string calldata decryptMessage,
+    string calldata publicSecret,
     string calldata description,
     string calldata imageUri,
     string calldata animationUrlBase64,
@@ -266,7 +266,7 @@ const { ethers } = require('ethers');
 async function mintNFT({
     recipientAddress,
     userEncrypted,      // hex string from step 4
-    decryptMessage,
+    publicSecret,
     description,
     imageUri,
     animationUrlBase64 = '',
@@ -284,7 +284,7 @@ async function mintNFT({
     const tx = await contract.mint(
         recipientAddress,
         '0x' + userEncrypted,
-        decryptMessage,
+        publicSecret,
         description,
         imageUri,
         animationUrlBase64,
@@ -307,7 +307,7 @@ const EthCrypto = require('eth-crypto');
 const fs = require('fs');
 
 async function provisionAndMint(request) {
-    const { walletAddress, decryptMessage, encryptedSignature } = request;
+    const { walletAddress, publicSecret, encryptedSignature } = request;
 
     // 1. Decrypt user's signature
     const privateKey = fs.readFileSync('/etc/subscription-manager/server.key', 'utf8').trim();
@@ -342,7 +342,7 @@ async function provisionAndMint(request) {
     const tx = await contract.mint(
         walletAddress,
         '0x' + userEncrypted,
-        decryptMessage,
+        publicSecret,
         `VM Access - ${hostname}`,
         'ipfs://QmDefaultImage...',
         '',
@@ -371,7 +371,7 @@ cast call $BLOCKHOST_NFT "tokenURI(uint256)" <TOKEN_ID> --rpc-url $SEPOLIA_RPC |
 
 # The returned JSON should contain:
 # - "user_encrypted": "<hex_ciphertext>"
-# - "decrypt_message": "<the message user signed>"
+# - "public_secret": "<the message user signed>"
 ```
 
 ## Related Files
