@@ -1,5 +1,17 @@
 # libpam-web3
 
+## SPECIAL.md (HIGHEST PRIORITY)
+
+**Read and internalize `SPECIAL.md` at the start of every session.** It defines per-component priority weights — where to invest extra scrutiny beyond standard professional practice. All stats at 5 = normal competence. Stats above 5 = extra focus.
+
+| Component | Profile | Extra focus areas |
+|---|---|---|
+| `pam_web3_tool` (tools CLI) | S7 P9 E6 C6 I7 A8 L6 | Security (P9 — crypto operations, key handling), Performance (A8 — runs per SSH login) |
+| `web3-auth-svc` | S7 P9 E8 C5 I7 A7 L7 | Security (P9 — auth service), Reliability (E8 — long-running, must not crash or leak) |
+| everything else (PAM module) | S8 P10 E7 C5 I8 A8 L7 | Security (P10 — authentication boundary, every code path is a potential auth bypass), Performance (A8 — called on every SSH login) |
+
+See `SPECIAL.md` for full stat definitions and the priority allocation model.
+
 ## Environment Variables
 
 **Essential environment variables are stored in `~/projects/sharedenv/`**
