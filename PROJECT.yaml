@@ -345,7 +345,7 @@ cli_tools:
     scripts:
       generate.sh:
         description: Generate signing page with embedded config
-        usage: ./generate.sh --server-pubkey "04..." --public-secret "Decrypt credentials"
+        usage: ./generate.sh --public-secret "message" --user-encrypted "hex"
         output: index.html with config values injected
       build.sh:
         description: Minify and base64 encode signing page

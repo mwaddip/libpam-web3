@@ -2,6 +2,8 @@
 
 This document describes how to mint AccessCredentialNFT tokens with user-encrypted connection details.
 
+> **Note**: This guide is for **provisioner/subscription manager implementations** - systems that mint NFTs for users. The PAM module (libpam-web3) does NOT need the server keypair described here; it authenticates purely via NFT ownership + GECOS matching.
+
 ## Overview
 
 When a user purchases VM access, they provide a signature that will later let them decrypt their connection details. This signature is encrypted for transport to protect it in transit.

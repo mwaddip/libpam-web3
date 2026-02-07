@@ -341,10 +341,11 @@ wallets_path = "/etc/pam_web3/wallets"
 ```toml
 [machine]
 id = "server-prod-01"
-private_key_file = "/etc/pam_web3/server.key"
+secret_key = "0x<your-64-char-hex-key>"  # openssl rand -hex 32
 
 [auth]
 mode = "nft"
+nft_lookup = "passwd"  # or "ldap"
 signing_url = "https://auth.example.com/verify"
 
 [blockchain]
@@ -352,11 +353,12 @@ socket_path = "/run/web3-auth/web3-auth.sock"
 chain_id = 1
 nft_contract = "0x1234..."
 
-[ldap]
-server = "ldap://localhost:389"
-base_dn = "ou=nft,dc=example,dc=com"
-bind_dn = "cn=pam,dc=example,dc=com"
-bind_password_file = "/etc/pam_web3/ldap.secret"
+# Optional LDAP config (only if nft_lookup = "ldap")
+# [ldap]
+# server = "ldap://localhost:389"
+# base_dn = "ou=nft,dc=example,dc=com"
+# bind_dn = "cn=pam,dc=example,dc=com"
+# bind_password_file = "/etc/pam_web3/ldap.secret"
 ```
 
 ## NFT Mode Setup

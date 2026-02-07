@@ -181,11 +181,6 @@ contract:
       modifier: onlyOwner
       description: Update per-token signing page
 
-    setSigningPage:
-      visibility: external
-      modifier: onlyOwner
-      description: Update contract-wide default signing page
-
     getAccessData:
       visibility: external
       view: true
@@ -208,9 +203,6 @@ contract:
 
     - name: CredentialUpdated
       params: [tokenId]
-
-    - name: SigningPageUpdated
-      params: []
 
   errors:
     - name: CredentialExpired
@@ -259,12 +251,11 @@ development:
         --rpc-url $SEPOLIA_RPC \
         --private-key $DEPLOYER_PRIVATE_KEY \
         --broadcast \
-        --constructor-args "BlockHost Access" "BHAC" "$SIGNING_PAGE_BASE64" "$DEFAULT_IMAGE_URI"
+        --constructor-args "BlockHost Access" "BHAC" "$DEFAULT_IMAGE_URI"
 
   constructor_args:
     - name: Name (string)
     - symbol: Symbol (string)
-    - signingPageBase64: Default signing page HTML (base64)
     - defaultImageUri: Default image URI for tokens
 
 # =============================================================================

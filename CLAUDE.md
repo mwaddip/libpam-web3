@@ -138,10 +138,10 @@ Generate customized signing pages for NFT minting:
 ```bash
 cd signing-page/
 
-# Generate HTML with server pubkey and decrypt message
+# Generate HTML with embedded credentials
 ./generate.sh \
-    --server-pubkey "04a1b2c3..." \
-    --public-secret "Decrypt BlockHost credentials"
+    --public-secret "Decrypt BlockHost credentials" \
+    --user-encrypted "a1b2c3d4..."
 
 # Base64 encode for NFT animationUrlBase64 parameter
 ./build.sh
