@@ -28,7 +28,6 @@ ldap.secret
 
 # Internal planning files
 PLAN.md
-SPECIAL.md
 .gitmodules
 
 # Packaging artifacts
