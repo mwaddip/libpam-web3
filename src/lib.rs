@@ -47,20 +47,35 @@ use std::ffi::{c_int, c_void, CStr, CString};
 use std::os::raw::c_uint;
 use std::ptr;
 
+const PAM_PROMPT_ECHO_OFF: c_int = 1;
+const PAM_TEXT_INFO: c_int = 4;
+
 /// PAM module entry point
 pub struct PamWeb3;
 
 impl PamModule for PamWeb3 {
     fn authenticate(handle: &PamHandle, _args: Vec<&CStr>, _flags: c_uint) -> PamReturnCode {
-        match authenticate_impl(handle) {
+        unsafe {
+            libc::openlog(
+                b"pam_web3\0".as_ptr() as *const i8,
+                libc::LOG_PID,
+                libc::LOG_AUTH,
+            );
+        }
+
+        let result = match authenticate_impl(handle) {
             Ok(username) => {
                 if set_pam_user(handle, &username).is_err() {
-                    return PamReturnCode::Auth_Err;
+                    PamReturnCode::Auth_Err
+                } else {
+                    PamReturnCode::Success
                 }
-                PamReturnCode::Success
             }
             Err(_) => PamReturnCode::Auth_Err,
-        }
+        };
+
+        unsafe { libc::closelog(); }
+        result
     }
 
     fn set_credentials(_handle: &PamHandle, _args: Vec<&CStr>, _flags: c_uint) -> PamReturnCode {
@@ -145,17 +160,13 @@ fn set_pam_user(handle: &PamHandle, username: &str) -> Result<(), AuthError> {
 }
 
 /// Log to syslog for debugging
+///
+/// Requires openlog() to have been called first (done in authenticate()).
 fn syslog(msg: &str) {
     use std::ffi::CString;
     if let Ok(c_msg) = CString::new(format!("pam_web3: {}", msg)) {
         unsafe {
-            libc::openlog(
-                b"pam_web3\0".as_ptr() as *const i8,
-                libc::LOG_PID,
-                libc::LOG_AUTH,
-            );
             libc::syslog(libc::LOG_INFO, b"%s\0".as_ptr() as *const i8, c_msg.as_ptr());
-            libc::closelog();
         }
     }
 }
@@ -184,10 +195,10 @@ fn authenticate_impl(handle: &PamHandle) -> Result<String, AuthError> {
         otp_instance.code, config.machine.id, config.auth.signing_url
     );
 
-    pam_prompt(handle, 4, &info_message)?;
+    pam_prompt(handle, PAM_TEXT_INFO, &info_message)?;
 
-    // Prompt for signature (PAM_PROMPT_ECHO_OFF = 1)
-    let sig = pam_prompt(handle, 1, "Paste signature: ")?
+    // Prompt for signature
+    let sig = pam_prompt(handle, PAM_PROMPT_ECHO_OFF, "Paste signature: ")?
         .ok_or(AuthError::NoSignature)?;
 
     if sig.is_empty() {
@@ -331,7 +342,7 @@ fn nft_ldap_lookup(
     let ldap_client = ldap::LdapClient::new(ldap_config.clone(), ldap_password);
 
     let validation_result = ldap_client
-        .validate_nft(token_id, &format!("{}", wallet_address))
+        .validate_nft(token_id, &wallet_address.to_string())
         .map_err(|e| {
             syslog(&format!("LDAP validation failed: {:?}", e));
             match e {
@@ -378,11 +389,3 @@ enum AuthError {
     NftModeNotCompiled,
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_auth_mode_enum() {
-        // Basic smoke test for the module
-        assert!(true);
-    }
-}

@@ -31,8 +31,6 @@ pub enum PasswdLookupError {
     ReadError(#[from] std::io::Error),
     #[error("token ID not found in passwd")]
     TokenNotFound,
-    #[error("invalid passwd entry")]
-    InvalidEntry,
 }
 
 /// Result of a successful passwd lookup
@@ -42,7 +40,7 @@ pub struct PasswdLookupResult {
 }
 
 /// Normalize token ID to decimal string for comparison
-fn normalize_token_id(token_id: &str) -> String {
+pub(crate) fn normalize_token_id(token_id: &str) -> String {
     let token_id = token_id.trim();
     // If it's a hex string, convert to decimal
     if let Some(hex_str) = token_id.strip_prefix("0x") {

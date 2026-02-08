@@ -5,6 +5,7 @@
 //! - Get the Linux username mapped to an NFT/wallet
 
 use crate::config::LdapConfig;
+use crate::passwd_lookup::normalize_token_id;
 use ldap3::{LdapConn, LdapConnSettings, Scope, SearchEntry};
 use std::time::Duration;
 use thiserror::Error;
@@ -46,6 +47,22 @@ impl LdapClient {
         Self { config, password }
     }
 
+    /// Connect to LDAP and bind with credentials
+    fn connect(&self) -> Result<LdapConn, LdapError> {
+        let settings = LdapConnSettings::new()
+            .set_conn_timeout(Duration::from_secs(self.config.timeout_seconds));
+
+        let mut ldap = LdapConn::with_settings(settings, &self.config.server)
+            .map_err(|e| LdapError::ConnectionFailed(e.to_string()))?;
+
+        ldap.simple_bind(&self.config.bind_dn, &self.password)
+            .map_err(|e| LdapError::BindFailed(e.to_string()))?
+            .success()
+            .map_err(|e| LdapError::BindFailed(e.to_string()))?;
+
+        Ok(ldap)
+    }
+
     /// Validate an NFT and get the associated username
     ///
     /// # Arguments
@@ -62,18 +79,7 @@ impl LdapClient {
         // Normalize token ID: convert hex to decimal if needed
         let token_id = normalize_token_id(token_id);
 
-        // Connect to LDAP
-        let settings = LdapConnSettings::new()
-            .set_conn_timeout(Duration::from_secs(self.config.timeout_seconds));
-
-        let mut ldap = LdapConn::with_settings(settings, &self.config.server)
-            .map_err(|e| LdapError::ConnectionFailed(e.to_string()))?;
-
-        // Bind with credentials
-        ldap.simple_bind(&self.config.bind_dn, &self.password)
-            .map_err(|e| LdapError::BindFailed(e.to_string()))?
-            .success()
-            .map_err(|e| LdapError::BindFailed(e.to_string()))?;
+        let mut ldap = self.connect()?;
 
         // Search for the NFT entry
         let filter = format!(
@@ -152,16 +158,7 @@ impl LdapClient {
     /// # Returns
     /// `true` if revoked, `false` if valid, or an error if the check fails
     pub fn is_revoked(&self, token_id: &str) -> Result<bool, LdapError> {
-        let settings = LdapConnSettings::new()
-            .set_conn_timeout(Duration::from_secs(self.config.timeout_seconds));
-
-        let mut ldap = LdapConn::with_settings(settings, &self.config.server)
-            .map_err(|e| LdapError::ConnectionFailed(e.to_string()))?;
-
-        ldap.simple_bind(&self.config.bind_dn, &self.password)
-            .map_err(|e| LdapError::BindFailed(e.to_string()))?
-            .success()
-            .map_err(|e| LdapError::BindFailed(e.to_string()))?;
+        let mut ldap = self.connect()?;
 
         let filter = format!(
             "(&({}={}))",
@@ -217,24 +214,6 @@ fn escape_ldap_filter(value: &str) -> String {
     }
 
     escaped
-}
-
-/// Normalize token ID: convert hex (0x...) to decimal string
-/// This allows LDAP entries to store token IDs as simple numbers
-fn normalize_token_id(token_id: &str) -> String {
-    let token_id = token_id.trim();
-
-    // If it's a hex string, convert to decimal
-    if let Some(hex_str) = token_id.strip_prefix("0x") {
-        // Parse as u128 to handle large token IDs (up to 128 bits)
-        // For full uint256, we'd need BigInt, but most token IDs fit in u128
-        if let Ok(num) = u128::from_str_radix(hex_str, 16) {
-            return num.to_string();
-        }
-    }
-
-    // Already decimal or couldn't parse - return as-is
-    token_id.to_string()
 }
 
 #[cfg(test)]

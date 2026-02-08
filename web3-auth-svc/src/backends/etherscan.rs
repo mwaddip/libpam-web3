@@ -3,7 +3,7 @@
 //! Uses Etherscan's REST API for NFT data retrieval.
 //! Supports Etherscan, Polygonscan, Arbiscan, etc.
 
-use super::{AccessData, BackendError, BlockchainBackend, NftMetadata, NftOwnership};
+use super::{BackendError, BlockchainBackend, NftMetadata, NftOwnership};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::time::Duration;
@@ -16,12 +16,8 @@ pub struct EtherscanConfig {
     /// API key
     pub api_key: String,
     /// Request timeout in seconds
-    #[serde(default = "default_timeout")]
+    #[serde(default = "super::default_timeout")]
     pub timeout_seconds: u64,
-}
-
-fn default_timeout() -> u64 {
-    30
 }
 
 /// Etherscan API response wrapper
@@ -33,21 +29,13 @@ struct EtherscanResponse<T> {
 }
 
 /// NFT transfer event from Etherscan
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct NftTransfer {
     token_id: String,
     contract_address: String,
     to: String,
     from: String,
-}
-
-/// Token info from Etherscan
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TokenInfo {
-    token_id: String,
-    token_uri: Option<String>,
 }
 
 /// Etherscan V2 backend implementation
@@ -119,8 +107,7 @@ impl EtherscanBackend {
     async fn get_token_uri(&self, contract: &str, token_id: &str) -> Result<String, BackendError> {
         // tokenURI(uint256) selector: 0xc87b56dd
         let token_id_clean = token_id.trim_start_matches("0x");
-        let token_id_num = u64::from_str_radix(token_id_clean, 16).unwrap_or(0);
-        let data = format!("0xc87b56dd{:064x}", token_id_num);
+        let data = format!("0xc87b56dd{:0>64}", token_id_clean);
 
         let url = self.build_url(
             "proxy",
@@ -140,51 +127,8 @@ impl EtherscanBackend {
             .and_then(|r| r.as_str())
             .ok_or_else(|| BackendError::InvalidResponse("no result".to_string()))?;
 
-        decode_abi_string(result)
+        super::decode_abi_string(result)
             .ok_or_else(|| BackendError::InvalidResponse("failed to decode tokenURI".to_string()))
-    }
-
-    /// Fetch metadata from URI
-    async fn fetch_metadata(&self, uri: &str) -> Result<NftMetadata, BackendError> {
-        let uri = resolve_uri(uri);
-
-        let response = self.client.get(&uri).send().await?;
-
-        if !response.status().is_success() {
-            return Err(BackendError::HttpError(format!(
-                "HTTP {}",
-                response.status()
-            )));
-        }
-
-        let json: serde_json::Value = response.json().await?;
-
-        let access = json.get("access").and_then(|a| {
-            Some(AccessData {
-                user_encrypted: a
-                    .get("user_encrypted")
-                    .and_then(|u| u.as_str())
-                    .map(|s| s.to_string()),
-                public_secret: a
-                    .get("public_secret")
-                    .and_then(|d| d.as_str())
-                    .map(|s| s.to_string()),
-            })
-        });
-
-        Ok(NftMetadata {
-            name: json.get("name").and_then(|v| v.as_str()).map(String::from),
-            description: json
-                .get("description")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            image: json.get("image").and_then(|v| v.as_str()).map(String::from),
-            animation_url: json
-                .get("animation_url")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            access,
-        })
     }
 
     /// Calculate current owner from transfer history
@@ -249,38 +193,7 @@ impl BlockchainBackend for EtherscanBackend {
         token_id: &str,
     ) -> Result<NftMetadata, BackendError> {
         let token_uri = self.get_token_uri(contract_address, token_id).await?;
-        self.fetch_metadata(&token_uri).await
-    }
-}
-
-/// Decode ABI-encoded string
-fn decode_abi_string(hex_str: &str) -> Option<String> {
-    let hex_str = hex_str.trim_start_matches("0x");
-    let bytes = hex::decode(hex_str).ok()?;
-
-    if bytes.len() < 64 {
-        return None;
-    }
-
-    let length = u64::from_be_bytes([
-        bytes[56], bytes[57], bytes[58], bytes[59], bytes[60], bytes[61], bytes[62], bytes[63],
-    ]) as usize;
-
-    if bytes.len() < 64 + length {
-        return None;
-    }
-
-    String::from_utf8(bytes[64..64 + length].to_vec()).ok()
-}
-
-/// Resolve IPFS/Arweave URIs to HTTP
-fn resolve_uri(uri: &str) -> String {
-    if let Some(hash) = uri.strip_prefix("ipfs://") {
-        format!("https://ipfs.io/ipfs/{}", hash)
-    } else if let Some(hash) = uri.strip_prefix("ar://") {
-        format!("https://arweave.net/{}", hash)
-    } else {
-        uri.to_string()
+        super::fetch_metadata_from_uri(&self.client, &token_uri).await
     }
 }
 
@@ -299,9 +212,10 @@ mod tests {
             client: reqwest::Client::new(),
         };
 
+        // Transfers in desc order (newest first), as Etherscan returns with sort=desc
         let transfers = vec![
             NftTransfer {
-                token_id: "1".to_string(),
+                token_id: "2".to_string(),
                 contract_address: "0xcontract".to_string(),
                 from: "0x0".to_string(),
                 to: "0xalice".to_string(),
@@ -313,7 +227,7 @@ mod tests {
                 to: "0xbob".to_string(),
             },
             NftTransfer {
-                token_id: "2".to_string(),
+                token_id: "1".to_string(),
                 contract_address: "0xcontract".to_string(),
                 from: "0x0".to_string(),
                 to: "0xalice".to_string(),

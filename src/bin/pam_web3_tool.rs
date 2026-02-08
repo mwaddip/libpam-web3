@@ -38,6 +38,11 @@ fn main() {
     }
 }
 
+fn warn_private_key_on_cmdline() {
+    eprintln!("Warning: private key on command line is visible in process listings (ps, /proc).");
+    eprintln!("         Prefer --private-key-file for better security.");
+}
+
 fn print_usage() {
     println!(
         r#"pam_web3_tool - Administration tool for pam_web3
@@ -189,6 +194,7 @@ fn derive_public_key(args: &[String]) {
             .trim()
             .to_string()
     } else if let Some(hex) = private_key_hex {
+        warn_private_key_on_cmdline();
         hex
     } else {
         eprintln!("Either --private-key-file or --private-key is required");
@@ -224,6 +230,7 @@ fn get_wallet_encryption_key(args: &[String]) {
     }
 
     let private_key_hex = private_key_hex.expect("--private-key is required");
+    warn_private_key_on_cmdline();
 
     // Strip 0x prefix if present
     let private_key_hex = private_key_hex
@@ -297,6 +304,7 @@ fn decrypt_data(args: &[String]) {
             .trim()
             .to_string()
     } else if let Some(hex) = private_key_hex {
+        warn_private_key_on_cmdline();
         hex.strip_prefix("0x").unwrap_or(&hex).to_string()
     } else {
         eprintln!("Either --private-key-file or --private-key is required");
