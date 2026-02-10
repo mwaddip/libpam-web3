@@ -143,23 +143,6 @@ Two separate packages for different deployment targets:
 | `libpam-web3` | VMs (client machines) | PAM module, `web3-auth-svc` daemon |
 | `libpam-web3-tools` | Management server | `pam_web3_tool`, signing page scripts |
 
-## Signing Page Generator
-
-Generate customized signing pages for NFT minting:
-
-```bash
-cd signing-page/
-
-# Generate HTML with embedded credentials
-./generate.sh \
-    --public-secret "Decrypt BlockHost credentials" \
-    --user-encrypted "a1b2c3d4..."
-
-# Base64 encode for NFT animationUrlBase64 parameter
-./build.sh
-# Output: signing-page.b64
-```
-
 ---
 
 ## Rules

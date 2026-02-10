@@ -70,10 +70,8 @@ mkdir -p "$PKG_DIR/usr/share/blockhost/contracts"
 echo "[4/5] Copying files..."
 cp "$PROJECT_DIR/target/release/pam_web3_tool" "$PKG_DIR/usr/bin/"
 
-# Copy signing page scripts
+# Copy signing page
 cp "$PROJECT_DIR/signing-page/index.html" "$PKG_DIR/usr/share/${PKG_NAME}/signing-page/"
-cp "$PROJECT_DIR/signing-page/build.sh" "$PKG_DIR/usr/share/${PKG_NAME}/signing-page/"
-cp "$PROJECT_DIR/signing-page/generate.sh" "$PKG_DIR/usr/share/${PKG_NAME}/signing-page/"
 
 # Copy NFT contract source
 cp "$PROJECT_DIR/contracts/src/AccessCredentialNFT.sol" "$PKG_DIR/usr/share/blockhost/contracts/"
@@ -123,13 +121,8 @@ case "$1" in
         echo "Tools available:"
         echo "  - pam_web3_tool: Keypair generation, encryption/decryption"
         echo ""
-        echo "Signing page generator:"
-        echo "  /usr/share/libpam-web3-tools/signing-page/"
-        echo ""
-        echo "Usage:"
-        echo "  cd /usr/share/libpam-web3-tools/signing-page/"
-        echo "  ./generate.sh --public-secret 'Decrypt credentials' --user-encrypted 'a1b2c3...'"
-        echo "  ./build.sh"
+        echo "Signing page:"
+        echo "  /usr/share/libpam-web3-tools/signing-page/index.html"
         echo ""
         echo "NFT Contract artifact:"
         echo "  /usr/share/blockhost/contracts/AccessCredentialNFT.json"
@@ -178,10 +171,8 @@ pam_web3_tool - CLI utility for:
   - Decrypting user_encrypted NFT fields
   - Deriving public keys
 
-Signing Page Generator - For NFT minting:
-  - /usr/share/libpam-web3-tools/signing-page/
-  - generate.sh: Creates customized signing page with embedded credentials
-  - build.sh: Base64 encodes for NFT animation_url
+Signing Page:
+  - /usr/share/libpam-web3-tools/signing-page/index.html
 
 NFT Contract - For deployment:
   - /usr/share/blockhost/contracts/AccessCredentialNFT.sol (source)
@@ -190,25 +181,17 @@ NFT Contract - For deployment:
 Usage
 -----
 
-1. Generate signing page for NFT minting:
-
-   cd /usr/share/libpam-web3-tools/signing-page
-   ./generate.sh \
-       --public-secret "Decrypt BlockHost credentials" \
-       --user-encrypted "a1b2c3d4..."
-   ./build.sh
-
-2. Generate server keypair:
+1. Generate server keypair:
 
    pam_web3_tool generate-keypair --output server.key --show-pubkey
 
-3. Encrypt connection details for NFT:
+2. Encrypt connection details for NFT:
 
    pam_web3_tool encrypt-symmetric \
        --signature "0x<user_signature>" \
        --plaintext '{"hostname":"192.168.1.100","port":22}'
 
-4. Deploy NFT contract:
+3. Deploy NFT contract:
 
    The compiled artifact at /usr/share/blockhost/contracts/AccessCredentialNFT.json
    contains the ABI and bytecode for deployment. Example with ethers.js:
@@ -231,7 +214,6 @@ find "$PKG_DIR" -type d -exec chmod 755 {} \;
 find "$PKG_DIR" -type f -exec chmod 644 {} \;
 chmod 755 "$PKG_DIR/DEBIAN/postinst"
 chmod 755 "$PKG_DIR/usr/bin/"*
-chmod 755 "$PKG_DIR/usr/share/${PKG_NAME}/signing-page/"*.sh
 
 # Clean up Foundry artifacts (git submodules created by forge install)
 echo "[5/6] Cleaning up build artifacts..."

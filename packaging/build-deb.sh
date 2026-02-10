@@ -47,11 +47,15 @@ mkdir -p "$PKG_DIR/etc/pam_web3"
 mkdir -p "$PKG_DIR/etc/web3-auth"
 mkdir -p "$PKG_DIR/usr/share/doc/${PKG_NAME}"
 mkdir -p "$PKG_DIR/usr/share/doc/${PKG_NAME}/examples"
+mkdir -p "$PKG_DIR/usr/share/${PKG_NAME}/signing-page"
 
 # Copy binaries
 echo "[4/5] Copying files..."
 cp "$PROJECT_DIR/target/release/libpam_web3.so" "$PKG_DIR/lib/x86_64-linux-gnu/security/"
 cp "$PROJECT_DIR/web3-auth-svc/target/release/web3-auth-svc" "$PKG_DIR/usr/bin/"
+
+# Copy signing page
+cp "$PROJECT_DIR/signing-page/index.html" "$PKG_DIR/usr/share/${PKG_NAME}/signing-page/"
 
 # Create control file
 cat > "$PKG_DIR/DEBIAN/control" << EOF

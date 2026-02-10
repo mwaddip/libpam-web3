@@ -340,17 +340,10 @@ cli_tools:
         usage: pam_web3_tool decrypt --scheme secp256k1 --private-key-file server.key --ciphertext "..."
         output: Decrypted plaintext
 
-  signing_page_generator:
+  signing_page:
     path: signing-page/
-    scripts:
-      generate.sh:
-        description: Generate signing page with embedded config
-        usage: ./generate.sh --public-secret "message" --user-encrypted "hex"
-        output: index.html with config values injected
-      build.sh:
-        description: Minify and base64 encode signing page
-        usage: ./build.sh
-        output: signing-page.b64 (base64 for animationUrlBase64 parameter)
+    installed_at: /usr/share/libpam-web3/signing-page/index.html
+    description: Static signing page served by VMs for wallet OTP signing
 
   extract_signing_page:
     platforms:
@@ -451,12 +444,10 @@ changelog:
           Use updateAnimationUrl(tokenId, newAnimationUrlBase64) for per-token updates.
       - component: signing_page
         change: |
-          generate.sh now takes --user-encrypted and --public-secret parameters.
-          Old: ./generate.sh --server-pubkey <hex> --public-secret <msg>
-          New: ./generate.sh --public-secret <msg> --user-encrypted <hex>
-          Each minted NFT has its own signing page with embedded credentials.
+          Removed generate.sh and decrypt tab from signing page.
+          Signing page now only handles OTP signing (connect wallet, sign message).
+          Signing page is now served from the local filesystem by VMs.
     new_features:
-      - Signing page generator embeds userEncrypted and publicSecret as read-only fields
       - AccessCredentialNFT.sol and ABI included in libpam-web3-tools package
 
   - version: "0.4.0"
@@ -479,7 +470,7 @@ changelog:
           - libpam-web3-tools: Server tools (pam_web3_tool, web3-auth-svc, signing page)
     new_features:
       - Simplified ownership-based authentication (wallet + NFT token ID + GECOS)
-      - signing-page/generate.sh for creating customized signing pages
+      - Signing page included in libpam-web3 VM package
       - Separate Debian packages for VMs vs management servers
 
   - version: "0.3.0"
