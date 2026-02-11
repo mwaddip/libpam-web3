@@ -8,7 +8,7 @@
 |----------|---------|
 | `DEPLOYER_PRIVATE_KEY` | Private key for contract deployment |
 | `BLOCKHOST_NFT` | Current AccessCredentialNFT contract address |
-| `SEPOLIA_RPC` | Sepolia RPC endpoint |
+| `RPC_URL` | RPC endpoint |
 
 **After deploying a new contract, update `BLOCKHOST_NFT` in the env file.**
 

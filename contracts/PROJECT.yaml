@@ -248,7 +248,7 @@ development:
     command: |
       source ~/projects/sharedenv/blockhost.env
       forge create src/AccessCredentialNFT.sol:AccessCredentialNFT \
-        --rpc-url $SEPOLIA_RPC \
+        --rpc-url $RPC_URL \
         --private-key $DEPLOYER_PRIVATE_KEY \
         --broadcast \
         --constructor-args "BlockHost Access" "BHAC" "$DEFAULT_IMAGE_URI"

@@ -257,7 +257,7 @@ cast send $BLOCKHOST_NFT \
     "" \
     0 \
     --private-key $DEPLOYER_PRIVATE_KEY \
-    --rpc-url $SEPOLIA_RPC
+    --rpc-url $RPC_URL
 ```
 
 #### Using ethers.js
@@ -274,7 +274,7 @@ async function mintNFT({
     animationUrlBase64 = '',
     expiresAt = 0
 }) {
-    const provider = new ethers.JsonRpcProvider(process.env.SEPOLIA_RPC);
+    const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
     const signer = new ethers.Wallet(process.env.DEPLOYER_PRIVATE_KEY, provider);
 
     const contract = new ethers.Contract(
@@ -333,7 +333,7 @@ async function provisionAndMint(request) {
     const userEncrypted = Buffer.concat([iv, encrypted, cipher.getAuthTag()]).toString('hex');
 
     // 4. Mint NFT
-    const provider = new ethers.JsonRpcProvider(process.env.SEPOLIA_RPC);
+    const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
     const signer = new ethers.Wallet(process.env.DEPLOYER_PRIVATE_KEY, provider);
     const contract = new ethers.Contract(
         process.env.BLOCKHOST_NFT,
@@ -369,7 +369,7 @@ After minting, verify the token URI contains correct data:
 
 ```bash
 # Get token URI
-cast call $BLOCKHOST_NFT "tokenURI(uint256)" <TOKEN_ID> --rpc-url $SEPOLIA_RPC | cast --to-ascii
+cast call $BLOCKHOST_NFT "tokenURI(uint256)" <TOKEN_ID> --rpc-url $RPC_URL | cast --to-ascii
 
 # The returned JSON should contain:
 # - "user_encrypted": "<hex_ciphertext>"
