@@ -22,6 +22,7 @@
 //! - Signature verification uses secp256k1 ecrecover
 //! - Fail-secure: any error results in authentication denial
 
+pub mod callback;
 pub mod config;
 pub mod otp;
 pub mod signature;
@@ -189,22 +190,65 @@ fn authenticate_impl(handle: &PamHandle) -> Result<String, AuthError> {
     let otp_instance = Otp::generate(config.auth.otp_length, &config.machine.id, &secret_key)
         .map_err(|_| AuthError::OtpError)?;
 
+    // Try to create a callback session if enabled
+    let session = if config.auth.callback_enabled {
+        match callback::Session::create(&otp_instance.code, &config.machine.id) {
+            Ok(s) => {
+                syslog(&format!("Callback session created: {}", s.session_id));
+                Some(s)
+            }
+            Err(e) => {
+                syslog(&format!("Callback session failed (manual-only): {}", e));
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Build signing URL, append ?session= if callback session exists
+    let signing_url = match &session {
+        Some(s) => format!("{}?session={}", config.auth.signing_url, s.session_id),
+        None => config.auth.signing_url.clone(),
+    };
+
     // Display OTP and signing URL to user (PAM_TEXT_INFO = 4)
     let info_message = format!(
         "\n=== Web3 Authentication ===\nCode: {}\nMachine: {}\nSign at: {}\n",
-        otp_instance.code, config.machine.id, config.auth.signing_url
+        otp_instance.code, config.machine.id, signing_url
     );
 
     pam_prompt(handle, PAM_TEXT_INFO, &info_message)?;
 
-    // Prompt for signature
-    let sig = pam_prompt(handle, PAM_PROMPT_ECHO_OFF, "Paste signature: ")?
-        .ok_or(AuthError::NoSignature)?;
+    // Prompt for signature (different text when callback is available)
+    let prompt_text = if session.is_some() {
+        "Press Enter after signing in browser, or paste signature: "
+    } else {
+        "Paste signature: "
+    };
 
-    if sig.is_empty() {
+    let sig_input = pam_prompt(handle, PAM_PROMPT_ECHO_OFF, prompt_text)?
+        .unwrap_or_default();
+
+    // Resolve signature: manual input or callback polling
+    let sig = if !sig_input.is_empty() {
+        sig_input
+    } else if let Some(ref s) = session {
+        syslog("Empty input, polling for callback signature...");
+        match s.wait_for_callback(config.auth.callback_grace_seconds) {
+            Some(sig) => {
+                syslog("Got callback signature");
+                sig
+            }
+            None => {
+                syslog("No callback signature received");
+                return Err(AuthError::NoSignature);
+            }
+        }
+    } else {
         syslog("Empty signature");
         return Err(AuthError::NoSignature);
-    }
+    };
     syslog(&format!(
         "Got signature: {}...{}",
         &sig[..10.min(sig.len())],

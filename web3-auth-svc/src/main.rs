@@ -5,6 +5,7 @@
 //! Etherscan, etc.) configurable via TOML config file.
 
 mod backends;
+mod https;
 mod protocol;
 
 use anyhow::{Context, Result};
@@ -58,6 +59,40 @@ struct Config {
 
     /// Etherscan backend config
     etherscan: Option<etherscan::EtherscanConfig>,
+
+    /// HTTPS server config for callback-based signing
+    #[serde(default)]
+    https: Option<HttpsConfig>,
+}
+
+/// HTTPS server configuration for callback-based signing
+#[derive(Debug, Clone, Deserialize)]
+struct HttpsConfig {
+    /// HTTPS port
+    #[serde(default = "default_https_port")]
+    port: u16,
+    /// Bind addresses (combined with port). Default: dual-stack IPv6+IPv4.
+    #[serde(default = "default_https_bind")]
+    bind: Vec<String>,
+    /// Path to TLS certificate PEM file
+    cert_path: String,
+    /// Path to TLS private key PEM file
+    key_path: String,
+    /// Path to signing page HTML file
+    #[serde(default = "default_signing_page_path")]
+    signing_page_path: String,
+}
+
+fn default_https_port() -> u16 {
+    8443
+}
+
+fn default_https_bind() -> Vec<String> {
+    vec!["::".to_string(), "0.0.0.0".to_string()]
+}
+
+fn default_signing_page_path() -> String {
+    "/usr/share/libpam-web3/signing-page/index.html".to_string()
 }
 
 fn default_socket_path() -> String {
@@ -255,7 +290,45 @@ async fn main() -> Result<()> {
 
     info!("Listening on {}", config.socket_path);
 
-    // Accept connections
+    // Start HTTPS servers if configured — dual-stack IPv6 + IPv4
+    if let Some(https_config) = &config.https {
+        let router = https::create_router(&https_config.signing_page_path)
+            .context("failed to create HTTPS router")?;
+
+        let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(
+            &https_config.cert_path,
+            &https_config.key_path,
+        )
+        .await
+        .context("failed to load TLS config")?;
+
+        let port = https_config.port;
+        let mut bind_addrs: Vec<std::net::SocketAddr> = Vec::new();
+        for addr_str in &https_config.bind {
+            let ip: std::net::IpAddr = addr_str
+                .parse()
+                .with_context(|| format!("invalid HTTPS bind address: {}", addr_str))?;
+            bind_addrs.push(std::net::SocketAddr::from((ip, port)));
+        }
+
+        for listen_addr in bind_addrs {
+            let router = router.clone();
+            let tls = tls_config.clone();
+
+            info!("HTTPS server listening on {}", listen_addr);
+
+            tokio::spawn(async move {
+                if let Err(e) = axum_server::bind_rustls(listen_addr, tls)
+                    .serve(router.into_make_service())
+                    .await
+                {
+                    error!("HTTPS server error on {}: {}", listen_addr, e);
+                }
+            });
+        }
+    }
+
+    // Accept Unix socket connections
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {

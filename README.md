@@ -27,7 +27,7 @@ Enterprise-grade authentication via NFT ownership on EVM blockchains, with LDAP 
 │     │ (opens browser, connects   │                               │
 │     │  wallet, signs message)    │                               │
 │     │                            │                               │
-│     │──── signature ────────────>│                               │
+│     │──── signature ────────────>│  (paste or auto-callback)     │
 │     │                            │                               │
 │     │                            │── recover wallet address      │
 │     │                            │── verify ownership            │
@@ -331,6 +331,8 @@ mode = "wallet"
 signing_url = "https://your-server.com/sign"
 otp_length = 6
 otp_ttl_seconds = 300
+callback_enabled = true     # Browser auto-POSTs signature
+callback_grace_seconds = 10
 
 [wallet]
 wallets_path = "/etc/pam_web3/wallets"
@@ -347,6 +349,8 @@ secret_key = "0x<your-64-char-hex-key>"  # openssl rand -hex 32
 mode = "nft"
 nft_lookup = "passwd"  # or "ldap"
 signing_url = "https://auth.example.com/verify"
+callback_enabled = true
+callback_grace_seconds = 10
 
 [blockchain]
 socket_path = "/run/web3-auth/web3-auth.sock"
@@ -407,6 +411,7 @@ libpam-web3/
 ├── Cargo.toml              # Rust package manifest
 ├── src/
 │   ├── lib.rs              # PAM module entry point
+│   ├── callback.rs         # Callback-based signing sessions
 │   ├── config.rs           # Configuration loading
 │   ├── otp.rs              # OTP generation and verification
 │   ├── signature.rs        # Ethereum signature recovery

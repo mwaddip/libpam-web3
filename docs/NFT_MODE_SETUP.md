@@ -5,15 +5,18 @@ This guide covers deploying and configuring libpam-web3 in NFT mode, where authe
 ## Overview
 
 NFT mode authentication flow:
-1. User connects via SSH and sees an OTP code
-2. User signs the OTP with their Ethereum wallet
-3. PAM module verifies the signature and recovers the wallet address
-4. web3-auth-svc queries the blockchain to find NFTs owned by the wallet
-5. NFT metadata contains encrypted machine ID - decrypted with server's private key
-6. If machine ID matches, username is looked up via:
+1. User connects via SSH and sees an OTP code + signing URL
+2. If callback enabled, URL includes `?session=` param for auto-fill
+3. User signs the OTP with their Ethereum wallet
+4. Signature delivered via callback (browser auto-POSTs) or manual paste
+5. PAM module verifies the signature and recovers the wallet address
+6. web3-auth-svc queries the blockchain to find NFTs owned by the wallet
+7. Username is looked up via:
    - **LDAP** (default): Query LDAP for token ID → username mapping and revocation status
    - **passwd**: Look for `nft=TOKEN_ID` in the user's GECOS field in `/etc/passwd`
-7. User is logged in as the mapped Linux username
+8. User is logged in as the mapped Linux username
+
+**Note (v0.4.0+):** No server private key needed. Authentication is purely ownership-based.
 
 ## Lookup Methods
 
@@ -61,22 +64,21 @@ forge create src/AccessCredentialNFT.sol:AccessCredentialNFT \
   --constructor-args \
     "Access Credentials" \
     "ACCESS" \
-    "PCFET0NUWVBFIGh0bWw+PGh0bWw+PGhlYWQ+PHRpdGxlPldlYjMgQXV0aDwvdGl0bGU+PC9oZWFkPjxib2R5PjxoMT5TaWduaW5nIFBhZ2UgUGxhY2Vob2xkZXI8L2gxPjwvYm9keT48L2h0bWw+" \
     "ipfs://QmDefaultImageHashHere"
 
 # Note the deployed contract address
 CONTRACT_ADDRESS="0x..."  # From deployment output
 ```
 
-## Step 2: Generate Server Keypair
+## Step 2: Generate Server Keypair (Optional)
 
-Each server needs an ECIES keypair. The public key is used to encrypt machine IDs in NFTs, and the private key is stored on the server for decryption.
+**Note (v0.4.0+):** Server keypairs are NOT required for authentication. Authentication is purely ownership-based (wallet owns NFT → token ID matches GECOS → access granted). Keypairs are only needed if you use ECIES encryption for specific features.
 
 ```bash
 # Build the tool
 cargo build --release --features nft
 
-# Generate keypair
+# Generate keypair (only if using ECIES encryption features)
 ./target/release/pam_web3_tool generate-keypair --output /etc/pam_web3/server.key
 
 # This outputs the public key - save it for minting NFTs
@@ -246,6 +248,14 @@ default_contract = "0xYourContractAddress"
 [jsonrpc]
 rpc_url = "https://ethereum-sepolia-rpc.publicnode.com"
 timeout_seconds = 30
+
+# HTTPS server for callback-based signing (optional)
+# [https]
+# port = 8443
+# bind = ["::", "0.0.0.0"]  # dual-stack IPv6+IPv4
+# cert_path = "/etc/libpam-web3/tls/cert.pem"
+# key_path = "/etc/libpam-web3/tls/key.pem"
+# signing_page_path = "/usr/share/libpam-web3/signing-page/index.html"
 EOF
 
 # Create systemd service
@@ -260,7 +270,7 @@ ExecStart=/usr/local/bin/web3-auth-svc --config /etc/web3-auth/config.toml --for
 Restart=always
 RestartSec=5
 Environment=RUST_LOG=info
-RuntimeDirectory=web3-auth
+RuntimeDirectory=web3-auth libpam-web3
 RuntimeDirectoryMode=0755
 
 [Install]
@@ -291,14 +301,16 @@ Use LDAP for centralized token ID → username mapping with revocation support:
 sudo tee /etc/pam_web3/config.toml > /dev/null << 'EOF'
 [machine]
 id = "your-server-hostname"
-private_key_file = "/etc/pam_web3/server.key"
+secret_key = "0x<generate-with-openssl-rand-hex-32>"
 
 [auth]
 mode = "nft"
 nft_lookup = "ldap"  # default, can be omitted
-signing_url = "http://your-server:8080"
+signing_url = "https://your-server:8443"
 otp_length = 6
 otp_ttl_seconds = 300
+callback_enabled = true
+callback_grace_seconds = 10
 
 [blockchain]
 socket_path = "/run/web3-auth/web3-auth.sock"
@@ -322,8 +334,7 @@ echo -n "YourLdapPassword" | sudo tee /etc/pam_web3/ldap.secret > /dev/null
 sudo chmod 600 /etc/pam_web3/ldap.secret
 
 # Set permissions
-sudo chmod 600 /etc/pam_web3/server.key
-sudo chmod 644 /etc/pam_web3/config.toml
+sudo chmod 640 /etc/pam_web3/config.toml
 ```
 
 #### Option B: Passwd Lookup (simple, no LDAP)
@@ -336,14 +347,16 @@ For simpler setups, use `/etc/passwd` GECOS fields to map token IDs to usernames
 sudo tee /etc/pam_web3/config.toml > /dev/null << 'EOF'
 [machine]
 id = "your-server-hostname"
-private_key_file = "/etc/pam_web3/server.key"
+secret_key = "0x<generate-with-openssl-rand-hex-32>"
 
 [auth]
 mode = "nft"
 nft_lookup = "passwd"  # Use /etc/passwd instead of LDAP
-signing_url = "http://your-server:8080"
+signing_url = "https://your-server:8443"
 otp_length = 6
 otp_ttl_seconds = 300
+callback_enabled = true
+callback_grace_seconds = 10
 
 [blockchain]
 socket_path = "/run/web3-auth/web3-auth.sock"
@@ -353,8 +366,7 @@ timeout_seconds = 10
 EOF
 
 # Set permissions
-sudo chmod 600 /etc/pam_web3/server.key
-sudo chmod 644 /etc/pam_web3/config.toml
+sudo chmod 640 /etc/pam_web3/config.toml
 ```
 
 **Create users with NFT token IDs in GECOS field:**
@@ -463,14 +475,16 @@ sudo useradd -m johndoe
    === Web3 Authentication ===
    Code: 123456
    Machine: your-server-hostname
-   Sign at: http://your-server:8080
+   Sign at: https://your-server:8443?session=abc123...
 
-   Paste signature:
+   Press Enter after signing in browser, or paste signature:
    ```
-5. Enter the code and machine ID on the signing page
-6. Sign with MetaMask
-7. Copy and paste the signature
+5. Open the signing URL - OTP and machine are auto-filled (callback mode)
+6. Sign with MetaMask - signature is automatically sent back
+7. Press Enter in the terminal
 8. You're logged in!
+
+   **Manual fallback**: If callback isn't available, enter OTP and machine manually on the signing page, then copy-paste the signature.
 
 ## Client-Side Signing Page
 
@@ -593,8 +607,9 @@ EOF
 
 ## Security Considerations
 
-1. **Private keys**: Store `server.key` and `deployer.key` securely, never commit to git
+1. **Private keys**: Store `deployer.key` securely, never commit to git (`server.key` is optional since v0.4.0)
 2. **LDAP password**: Use a strong password, restrict access to `ldap.secret`
 3. **RPC endpoint**: Consider using a private RPC endpoint for production
 4. **OTP TTL**: Default 300 seconds, adjust based on security requirements
 5. **Socket permissions**: web3-auth-svc socket is root-only by default
+6. **TLS certificate**: Replace the auto-generated self-signed cert with a proper certificate for production

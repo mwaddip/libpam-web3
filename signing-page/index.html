@@ -66,6 +66,9 @@ const $=id=>document.getElementById(id);
 const show=(id,v=true)=>$(id).classList.toggle('hidden',!v);
 const status=(msg,type='success')=>{const s=$('status');s.textContent=msg;s.className='status '+type;show('status')};
 
+// Parse ?session= query parameter for callback mode
+const sessionId=(new URLSearchParams(window.location.search)).get('session');
+
 async function connect(){
     if(!window.ethereum){status('No wallet found. Install MetaMask.','error');return}
     try{
@@ -75,7 +78,19 @@ async function connect(){
         show('connect-section',false);
         show('main-section');
         show('status',false);
+        // If callback session exists, auto-fill fields from server
+        if(sessionId) await loadSession();
     }catch(e){status('Connection rejected','error')}
+}
+
+async function loadSession(){
+    try{
+        const res=await fetch('/auth/pending/'+sessionId);
+        if(!res.ok) return;
+        const data=await res.json();
+        if(data.otp){$('code').value=data.otp;$('code').readOnly=true}
+        if(data.machine_id){$('machine').value=data.machine_id;$('machine').readOnly=true}
+    }catch(e){/* fall through to manual mode */}
 }
 
 async function sign(){
@@ -88,6 +103,18 @@ async function sign(){
         $('sign').disabled=true;
         $('sign').textContent='Signing...';
         const sig=await window.ethereum.request({method:'personal_sign',params:[msg,addr]});
+        // If callback session, POST signature back to server
+        if(sessionId){
+            try{
+                const cb=await fetch('/auth/callback/'+sessionId,{method:'POST',body:sig});
+                if(cb.ok){
+                    show('sign-form',false);
+                    show('sign-result',false);
+                    status('Signature sent! Press Enter in your terminal.','success');
+                    return;
+                }
+            }catch(e){/* fall through to manual copy mode */}
+        }
         $('sig').textContent=sig;
         show('sign-form',false);
         show('sign-result');
@@ -104,7 +131,10 @@ function resetSign(){
     show('sign-form');
     show('sign-result',false);
     $('code').value='';
+    $('code').readOnly=false;
+    $('machine').readOnly=false;
     show('status',false);
+    if(sessionId) loadSession();
 }
 
 function copy(id,btnId){
@@ -128,6 +158,7 @@ if(window.ethereum&&window.ethereum.selectedAddress){
     $('wallet').textContent='Connected: '+addr;
     show('connect-section',false);
     show('main-section');
+    if(sessionId) loadSession();
 }
 })();
 </script>

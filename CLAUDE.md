@@ -37,6 +37,7 @@ PAM module for Linux authentication via Ethereum wallet signatures. Two modes:
 ```
 src/
 ├── lib.rs           # PAM entry point, mode dispatch
+├── callback.rs      # Callback-based signing session management (file IPC)
 ├── config.rs        # TOML config loading (/etc/pam_web3/config.toml)
 ├── otp.rs           # OTP generation (HMAC-SHA3, machine_id + timestamp)
 ├── signature.rs     # secp256k1 ecrecover (personal_sign format)
@@ -47,7 +48,7 @@ src/
 └── bin/
     └── pam_web3_tool.rs  # CLI for keypair gen, encryption
 
-web3-auth-svc/       # Daemon for blockchain queries (separate binary)
+web3-auth-svc/       # Daemon for blockchain queries + HTTPS callback server
 contracts/           # Solidity: AccessCredentialNFT (ERC-721)
 signing-page/        # Browser wallet signing UI
 ```
@@ -58,7 +59,7 @@ signing-page/        # Browser wallet signing UI
 cargo build --release                 # Wallet mode only
 cargo build --release --features nft  # Full NFT support
 
-# Debian packages (v0.4.0+)
+# Debian packages
 ./packaging/build-deb.sh              # libpam-web3 (PAM module for VMs)
 ./packaging/build-deb-tools.sh        # libpam-web3-tools (server tools)
 ```
@@ -85,6 +86,8 @@ mode = "wallet"           # or "nft"
 signing_url = "https://..."
 otp_length = 6
 otp_ttl_seconds = 300
+callback_enabled = true   # Browser auto-POSTs signature (v0.6.0+)
+callback_grace_seconds = 10
 
 [wallet]                  # Wallet mode only
 wallets_path = "/etc/pam_web3/wallets"
@@ -104,14 +107,17 @@ bind_password_file = "..."
 ## Authentication Flow
 
 1. PAM loads config, generates OTP (HMAC: machine_id + timestamp + secret)
-2. User sees OTP + signing URL
-3. User signs message: `Authenticate to {machine_id} with code: {otp}`
-4. User pastes signature
-5. PAM recovers wallet address via ecrecover
-6. Mode-specific lookup:
+2. If callback enabled: create session file in `/run/libpam-web3/pending/`, append `?session=` to URL
+3. User sees OTP + signing URL
+4. User signs message: `Authenticate to {machine_id} with code: {otp}`
+5. Signature delivery (two paths):
+   - **Callback mode** (v0.6.0+): Browser auto-fills OTP/machine from session, POSTs signature to web3-auth-svc HTTPS → user presses Enter
+   - **Manual mode**: User copy-pastes signature into terminal
+6. PAM recovers wallet address via ecrecover
+7. Mode-specific lookup:
    - Wallet: Check wallets file
    - NFT: Query blockchain for wallet's NFT token IDs → Match against GECOS (`nft=TOKEN_ID`)
-7. Return username to PAM
+8. Return username to PAM
 
 **NFT Mode (v0.4.0+)**: No server private key needed. Authentication is purely ownership-based:
 - Wallet owns NFT → Token ID matches GECOS entry → Access granted
@@ -120,6 +126,7 @@ bind_password_file = "..."
 
 - Default: wallet mode only (~10 deps)
 - `nft`: Adds tokio, ldap3, ecies, aes-gcm, crypto_box, base64, clap
+- `serde_json` is always-on (needed for callback session files)
 
 ## Testing
 
@@ -134,14 +141,14 @@ cargo test --features nft             # Include NFT module tests
 - CLI tool: `target/release/pam_web3_tool` (requires --features nft)
 - Web3 service: `web3-auth-svc/target/release/web3-auth-svc`
 
-## Debian Packages (v0.4.0+)
+## Debian Packages
 
 Two separate packages for different deployment targets:
 
 | Package | Install On | Contents |
 |---------|------------|----------|
-| `libpam-web3` | VMs (client machines) | PAM module, `web3-auth-svc` daemon |
-| `libpam-web3-tools` | Management server | `pam_web3_tool`, signing page scripts |
+| `libpam-web3` | VMs (client machines) | PAM module, `web3-auth-svc` daemon, signing page, self-signed TLS cert |
+| `libpam-web3-tools` | Management server | `pam_web3_tool`, signing page, contract artifacts |
 
 ---
 

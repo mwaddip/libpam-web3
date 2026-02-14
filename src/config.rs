@@ -65,6 +65,12 @@ pub struct AuthConfig {
     /// Only used when mode = "nft"
     #[serde(default)]
     pub nft_lookup: NftLookupMethod,
+    /// Enable callback-based signing (browser POSTs signature back)
+    #[serde(default = "default_callback_enabled")]
+    pub callback_enabled: bool,
+    /// Polling window in seconds after user presses Enter with empty input
+    #[serde(default = "default_callback_grace_seconds")]
+    pub callback_grace_seconds: u64,
 }
 
 /// Authentication mode
@@ -165,6 +171,14 @@ fn default_revoked_attr() -> String {
 
 fn default_username_attr() -> String {
     "linuxUsername".to_string()
+}
+
+fn default_callback_enabled() -> bool {
+    true
+}
+
+fn default_callback_grace_seconds() -> u64 {
+    10
 }
 
 impl Config {

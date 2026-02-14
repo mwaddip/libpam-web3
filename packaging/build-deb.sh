@@ -17,7 +17,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-VERSION="0.5.0"
+VERSION="0.6.0"
 ARCH="amd64"
 PKG_NAME="libpam-web3"
 PKG_DIR="$SCRIPT_DIR/${PKG_NAME}_${VERSION}_${ARCH}"
@@ -104,13 +104,31 @@ case "$1" in
         ln -sf /lib/x86_64-linux-gnu/security/libpam_web3.so \
                /lib/x86_64-linux-gnu/security/pam_web3.so 2>/dev/null || true
 
-        # Create runtime directory for web3-auth-svc
+        # Create runtime directories
         mkdir -p /run/web3-auth
         chmod 755 /run/web3-auth
+        mkdir -p /run/libpam-web3/pending
+        chmod 700 /run/libpam-web3/pending
 
         # Create config directory permissions
         chmod 750 /etc/pam_web3 2>/dev/null || true
         chmod 750 /etc/web3-auth 2>/dev/null || true
+
+        # Generate self-signed TLS certificate if not present
+        TLS_DIR="/etc/libpam-web3/tls"
+        if [ ! -f "$TLS_DIR/cert.pem" ]; then
+            mkdir -p "$TLS_DIR"
+            if command -v openssl >/dev/null 2>&1; then
+                openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+                    -keyout "$TLS_DIR/key.pem" -out "$TLS_DIR/cert.pem" \
+                    -days 3650 -nodes -subj "/CN=$(hostname)" \
+                    -addext "subjectAltName=DNS:$(hostname),IP:$(hostname -I | awk '{print $1}')" \
+                    2>/dev/null || true
+                chmod 600 "$TLS_DIR/key.pem" 2>/dev/null || true
+                chmod 644 "$TLS_DIR/cert.pem" 2>/dev/null || true
+                echo "Self-signed TLS certificate generated in $TLS_DIR"
+            fi
+        fi
 
         # Reload systemd if available
         if command -v systemctl >/dev/null 2>&1; then
@@ -167,7 +185,9 @@ case "$1" in
     purge)
         rm -rf /etc/pam_web3 2>/dev/null || true
         rm -rf /etc/web3-auth 2>/dev/null || true
+        rm -rf /etc/libpam-web3 2>/dev/null || true
         rm -rf /run/web3-auth 2>/dev/null || true
+        rm -rf /run/libpam-web3 2>/dev/null || true
         rm -f /lib/x86_64-linux-gnu/security/pam_web3.so 2>/dev/null || true
         ;;
     remove)
@@ -201,6 +221,9 @@ signing_url = "https://your-signing-page.example.com"
 # OTP settings
 otp_length = 6
 otp_ttl_seconds = 300
+# Callback-based signing (browser POSTs signature back automatically)
+callback_enabled = true
+callback_grace_seconds = 10
 
 [blockchain]
 # Unix socket for web3-auth-svc (must be accessible from this VM)
@@ -250,6 +273,15 @@ timeout_seconds = 30
 # api_url = "https://api.etherscan.io"
 # api_key = "YOUR_API_KEY"
 # timeout_seconds = 30
+
+# HTTPS server for callback-based signing (optional)
+# Uncomment to enable browser → terminal signature relay
+# [https]
+# port = 8443
+# bind = ["::", "0.0.0.0"]  # dual-stack IPv6+IPv4
+# cert_path = "/etc/libpam-web3/tls/cert.pem"
+# key_path = "/etc/libpam-web3/tls/key.pem"
+# signing_page_path = "/usr/share/libpam-web3/signing-page/index.html"
 EOF
 
 # Create systemd service file
@@ -271,10 +303,10 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/run/web3-auth
+ReadWritePaths=/run/web3-auth /run/libpam-web3
 
-# Runtime directory
-RuntimeDirectory=web3-auth
+# Runtime directories
+RuntimeDirectory=web3-auth libpam-web3
 RuntimeDirectoryMode=0755
 
 [Install]
