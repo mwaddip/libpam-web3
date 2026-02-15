@@ -16,7 +16,7 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 # HTTPS server for callback-based signing
 axum = "0.8"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
-rustls = "0.23"
+rustls = { version = "0.23", features = ["ring"] }
 rustls-pemfile = "2"
 
 # Serialization
