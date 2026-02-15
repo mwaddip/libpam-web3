@@ -242,6 +242,11 @@ if [ -f "$DEB_FILE" ]; then
     echo ""
     echo "To install:"
     echo "  sudo dpkg -i $DEB_FILE"
+
+    # Clean build caches so stale artifacts can't break the next build
+    echo ""
+    echo "Cleaning build caches..."
+    cd "$PROJECT_DIR" && cargo clean
 else
     echo "ERROR: Package build failed"
     exit 1

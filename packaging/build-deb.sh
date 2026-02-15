@@ -425,6 +425,12 @@ if [ -f "$DEB_FILE" ]; then
     echo ""
     echo "For server-side tools, also build:"
     echo "  ./build-deb-tools.sh"
+
+    # Clean build caches so stale artifacts can't break the next build
+    echo ""
+    echo "Cleaning build caches..."
+    cd "$PROJECT_DIR" && cargo clean
+    cd "$PROJECT_DIR/web3-auth-svc" && cargo clean
 else
     echo "ERROR: Package build failed"
     exit 1
