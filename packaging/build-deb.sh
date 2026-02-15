@@ -293,6 +293,7 @@ After=network.target
 
 [Service]
 Type=simple
+ExecStartPre=/bin/mkdir -p /run/libpam-web3/pending
 ExecStart=/usr/bin/web3-auth-svc --config /etc/web3-auth/config.toml --foreground
 Restart=always
 RestartSec=5
