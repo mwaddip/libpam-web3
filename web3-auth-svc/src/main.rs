@@ -245,6 +245,13 @@ async fn send_response(stream: &mut UnixStream, response: &Response) -> Result<(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Select ring as the TLS crypto provider before any TLS context is created.
+    // Both ring and aws-lc-rs end up enabled transitively (reqwest, axum-server),
+    // so rustls cannot auto-select — we must pick explicitly.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls CryptoProvider");
+
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
