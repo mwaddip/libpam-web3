@@ -42,13 +42,14 @@ authentication:
     - step: 3
       action: User signs OTP with wallet
     - step: 4
-      action: PAM recovers wallet address from signature
+      action: PAM recovers wallet address from signature (EVM ecrecover or OPNet OTP validation)
     - step: 5
-      action: PAM queries blockchain for wallet's NFT token IDs
+      action: PAM checks /etc/passwd GECOS for matching wallet=ADDRESS
     - step: 6
-      action: PAM checks /etc/passwd GECOS for matching nft=TOKEN_ID
-    - step: 7
       action: If match found, user authenticated as that Linux user
+    - note: |
+        As of v0.7.0, PAM no longer queries blockchain directly.
+        The reconciler populates wallet=ADDRESS in GECOS fields on VMs.
 
   no_server_key_needed: |
     Unlike previous design, servers do NOT need private keys.

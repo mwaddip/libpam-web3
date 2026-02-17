@@ -2,47 +2,20 @@
 #
 # Copy this file to /etc/web3-auth/config.toml and customize
 
-# Unix socket path (default: /run/web3-auth/web3-auth.sock)
-socket_path = "/run/web3-auth/web3-auth.sock"
-
-# Backend type: "jsonrpc" or "etherscan"
-backend = "jsonrpc"
-
-# Default chain ID (used if not specified in request)
-# 1 = Ethereum Mainnet, 137 = Polygon, 42161 = Arbitrum
-default_chain_id = 1
-
-# Default NFT contract address (optional)
-# default_contract = "0x1234567890abcdef1234567890abcdef12345678"
-
 # ============================================================
-# JSON-RPC Backend Configuration
-# Required if backend = "jsonrpc"
+# HTTPS Server Configuration (required)
+# Serves the signing page and handles signature callbacks
 # ============================================================
-[jsonrpc]
-# RPC endpoint URL
-# Examples:
-#   - Alchemy: https://eth-mainnet.g.alchemy.com/v2/YOUR_API_KEY
-#   - Infura: https://mainnet.infura.io/v3/YOUR_PROJECT_ID
-#   - Local node: http://localhost:8545
-rpc_url = "https://eth-mainnet.g.alchemy.com/v2/YOUR_API_KEY"
+[https]
+# HTTPS port
+port = 8443
 
-# Request timeout in seconds
-timeout_seconds = 30
+# Bind addresses (dual-stack IPv6+IPv4)
+bind = ["::", "0.0.0.0"]
 
-# ============================================================
-# Etherscan Backend Configuration
-# Required if backend = "etherscan"
-# ============================================================
-# [etherscan]
-# # API base URL
-# # - Ethereum: https://api.etherscan.io
-# # - Polygon: https://api.polygonscan.com
-# # - Arbitrum: https://api.arbiscan.io
-# api_url = "https://api.etherscan.io"
-#
-# # Your Etherscan API key
-# api_key = "YOUR_ETHERSCAN_API_KEY"
-#
-# # Request timeout in seconds
-# timeout_seconds = 30
+# TLS certificate and key paths
+cert_path = "/etc/libpam-web3/tls/cert.pem"
+key_path = "/etc/libpam-web3/tls/key.pem"
+
+# Path to signing page HTML file
+signing_page_path = "/usr/share/libpam-web3/signing-page/index.html"

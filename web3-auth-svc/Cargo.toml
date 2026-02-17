@@ -2,16 +2,12 @@
 name = "web3-auth-svc"
 version = "0.2.0"
 edition = "2021"
-description = "Local service for NFT-based authentication verification"
+description = "HTTPS server for callback-based signing"
 license = "MIT"
 
 [dependencies]
 # Async runtime
 tokio = { version = "1", features = ["full"] }
-async-trait = "0.1"
-
-# HTTP client for RPC calls
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 # HTTPS server for callback-based signing
 axum = "0.8"
@@ -26,9 +22,6 @@ toml = "0.8"
 
 # Crypto
 hex = "0.4"
-ecies = "0.2"
-sha3 = "0.10"
-base64 = "0.22"
 
 # Error handling
 thiserror = "2"

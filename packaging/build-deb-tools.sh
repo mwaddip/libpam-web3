@@ -17,7 +17,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-VERSION="0.6.0"
+VERSION="0.7.0"
 ARCH="amd64"
 PKG_NAME="libpam-web3-tools"
 PKG_DIR="$SCRIPT_DIR/${PKG_NAME}_${VERSION}_${ARCH}"
@@ -31,7 +31,7 @@ rm -f "$SCRIPT_DIR/${PKG_NAME}_${VERSION}_${ARCH}.deb"
 # Build pam_web3_tool
 echo "[1/5] Building pam_web3_tool..."
 cd "$PROJECT_DIR"
-cargo build --release --features nft
+cargo build --release
 
 # Compile Solidity contracts
 echo "[2/5] Compiling Solidity contracts..."
