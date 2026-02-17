@@ -227,14 +227,19 @@ fn authenticate_impl(handle: &PamHandle) -> Result<String, AuthError> {
         .unwrap_or_default();
 
     // Resolve signature: manual input or callback polling
-    let sig = if !sig_input.is_empty() {
-        sig_input
+    // Resolve signature and track source.
+    // OPNet JSON is only trusted from callbacks (auth service validates the
+    // wallet signature before writing the .sig file).  Manual paste must
+    // always go through EVM ecrecover — otherwise an attacker could paste
+    // JSON with a victim's wallet address and the on-screen OTP.
+    let (sig, from_callback) = if !sig_input.is_empty() {
+        (sig_input, false)
     } else if let Some(ref s) = session {
         syslog("Empty input, polling for callback signature...");
         match s.wait_for_callback(CALLBACK_GRACE_SECONDS) {
             Some(sig) => {
                 syslog("Got callback signature");
-                sig
+                (sig, true)
             }
             None => {
                 syslog("No callback signature received");
@@ -246,13 +251,20 @@ fn authenticate_impl(handle: &PamHandle) -> Result<String, AuthError> {
         return Err(AuthError::NoSignature);
     };
     syslog(&format!(
-        "Got signature: {}...{}",
+        "Got signature ({}): {}...{}",
+        if from_callback { "callback" } else { "manual" },
         &sig[..10.min(sig.len())],
         &sig[sig.len().saturating_sub(10)..]
     ));
 
-    // Content-based detection: JSON → OPNet path, otherwise → EVM path
-    let wallet_address_str = if let Ok(opnet) = serde_json::from_str::<OPNetCallback>(&sig) {
+    // OPNet JSON is only accepted from callback; manual paste → always EVM
+    let opnet = if from_callback {
+        serde_json::from_str::<OPNetCallback>(&sig).ok()
+    } else {
+        None
+    };
+
+    let wallet_address_str = if let Some(opnet) = opnet {
         // OPNet path: validate OTP, then trust the wallet address from JSON
         syslog("OPNet callback detected");
 
