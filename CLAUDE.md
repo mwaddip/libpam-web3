@@ -88,19 +88,49 @@ otp_ttl_seconds = 300
 5. Signature delivery (two paths):
    - **Callback mode**: Browser auto-fills OTP/machine from session, POSTs signature to auth service → user presses Enter
    - **Manual mode**: User copy-pastes signature into terminal (fallback when no auth service running)
-6. Content-based signature detection:
-   - **Raw hex** → EVM path: secp256k1 ecrecover → wallet address
-   - **JSON** `{otp, machine_id, wallet_address}` → OPNet path: validate OTP → use wallet address
-7. GECOS lookup: scan `/etc/passwd` for `wallet=ADDRESS` match
+6. Signature detection (source-dependent):
+   - **Manual paste** → always EVM: secp256k1 ecrecover → wallet address
+   - **Callback .sig file** → try JSON first, fall back to EVM:
+     - **JSON** `{otp, machine_id, wallet_address}` → OPNet path: validate OTP → use wallet address
+     - **Raw hex** → EVM path: ecrecover → wallet address
+7. GECOS lookup: scan `/etc/passwd` for `wallet=ADDRESS` match (case-insensitive)
 8. Return username to PAM
 
-## .sig File Content Contract
+## IPC Contracts
 
-The `.sig` file (or pasted input) contains either:
-- **Raw hex** (EVM): `0x` + 130 hex chars = 65-byte secp256k1 signature
-- **JSON** (OPNet): `{"otp":"123456","machine_id":"server","wallet_address":"0x..."}`
+### Session file (PAM → auth service)
 
-JSON parse failure falls through to EVM path (fail-secure: invalid hex → deny).
+Written by PAM to `/run/libpam-web3/pending/{session_id}.json`:
+
+```json
+{"otp":"123456","machine_id":"server-name","session_id":"a1b2c3...hex32"}
+```
+
+- `session_id`: 128-bit random hex (32 chars)
+- Auth service reads this to show OTP/machine to the browser
+
+### .sig file (auth service → PAM)
+
+Written by auth service to `/run/libpam-web3/pending/{session_id}.sig`:
+
+**EVM** (raw hex):
+```
+0x + 130 hex chars (65-byte secp256k1 signature)
+```
+
+**OPNet** (JSON — callback only, never accepted from manual paste):
+```json
+{"otp":"123456","machine_id":"server-name","wallet_address":"0xAbCd...1234"}
+```
+
+- `wallet_address` is chain-agnostic (EVM `0x...`, Bitcoin `bc1q...`, etc.)
+- Must match the GECOS `wallet=ADDRESS` field (case-insensitive)
+- Must not be empty
+- All three fields required; extra fields ignored
+
+**Trust model**: OPNet JSON trusts the `wallet_address` without cryptographic proof — the auth service must have verified the wallet signature before writing the .sig file. This is why JSON is rejected from manual paste (the OTP is displayed on screen, so terminal input carries no proof of wallet ownership).
+
+Non-JSON content falls through to EVM ecrecover (fail-secure: invalid hex → deny).
 
 ## GECOS Format
 
@@ -108,7 +138,7 @@ JSON parse failure falls through to EVM path (fail-secure: invalid hex → deny)
 wallet=0x1234...abcd,nft=5
 ```
 
-- `wallet=ADDRESS` — required for authentication (case-insensitive match)
+- `wallet=ADDRESS` — required for authentication (case-insensitive string match, chain-agnostic)
 - `nft=TOKEN_ID` — optional metadata (token ID for reference)
 - Can include other comma-separated fields: `John Doe,wallet=0x...,nft=5`
 
