@@ -226,7 +226,7 @@ cat > "$PKG_DIR/etc/web3-auth/config.toml" << 'EOF'
 
 [https]
 port = 8443
-bind = ["::", "0.0.0.0"]
+bind = ["::"]
 cert_path = "/etc/libpam-web3/tls/cert.pem"
 key_path = "/etc/libpam-web3/tls/key.pem"
 signing_page_path = "/usr/share/libpam-web3/signing-page/index.html"

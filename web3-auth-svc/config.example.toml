@@ -10,8 +10,9 @@
 # HTTPS port
 port = 8443
 
-# Bind addresses (dual-stack IPv6+IPv4)
-bind = ["::", "0.0.0.0"]
+# Bind addresses. Default [::] handles both IPv4 and IPv6 (Linux dual-stack).
+# Use ["0.0.0.0"] for IPv4-only environments.
+bind = ["::"]
 
 # TLS certificate and key paths
 cert_path = "/etc/libpam-web3/tls/cert.pem"

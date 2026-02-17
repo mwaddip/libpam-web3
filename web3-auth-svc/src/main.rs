@@ -38,7 +38,7 @@ struct HttpsConfig {
     /// HTTPS port
     #[serde(default = "default_https_port")]
     port: u16,
-    /// Bind addresses (combined with port). Default: dual-stack IPv6+IPv4.
+    /// Bind addresses (combined with port). Default: [::] (dual-stack, accepts IPv4+IPv6).
     #[serde(default = "default_https_bind")]
     bind: Vec<String>,
     /// Path to TLS certificate PEM file
@@ -55,7 +55,7 @@ fn default_https_port() -> u16 {
 }
 
 fn default_https_bind() -> Vec<String> {
-    vec!["::".to_string(), "0.0.0.0".to_string()]
+    vec!["::".to_string()]
 }
 
 fn default_signing_page_path() -> String {
