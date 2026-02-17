@@ -7,7 +7,6 @@
 | Component | Profile | Extra focus areas |
 |---|---|---|
 | `pam_web3_tool` (tools CLI) | S7 P9 E6 C6 I7 A8 L6 | Security (P9 — crypto operations, key handling), Performance (A8 — runs per SSH login) |
-| `web3-auth-svc` | S7 P9 E8 C5 I7 A7 L7 | Security (P9 — auth service), Reliability (E8 — long-running, must not crash or leak) |
 | everything else (PAM module) | S8 P10 E7 C5 I8 A8 L7 | Security (P10 — authentication boundary, every code path is a potential auth bypass), Performance (A8 — called on every SSH login) |
 
 See `SPECIAL.md` for full stat definitions and the priority allocation model.
@@ -47,16 +46,13 @@ src/
 └── bin/
     └── pam_web3_tool.rs  # CLI for keypair gen, encryption
 
-web3-auth-svc/       # HTTPS server for signing page + callback endpoints
 contracts/           # Solidity: AccessCredentialNFT (ERC-721)
-signing-page/        # Browser wallet signing UI
 ```
 
 ## Build Commands
 
 ```bash
 cargo build --release                 # PAM module + pam_web3_tool
-cd web3-auth-svc && cargo build --release  # HTTPS signing server
 
 # Debian packages
 ./packaging/build-deb.sh              # libpam-web3 (PAM module for VMs)
@@ -69,7 +65,6 @@ cd web3-auth-svc && cargo build --release  # HTTPS signing server
 |------|---------|
 | `/etc/pam_web3/config.toml` | Runtime configuration |
 | `/lib/security/pam_web3.so` | Installed PAM module |
-| `/etc/web3-auth/config.toml` | web3-auth-svc HTTPS server config |
 
 ## Config Format
 
@@ -82,19 +77,17 @@ secret_key = "0x..."      # HMAC key for OTP generation
 signing_url = "https://..."
 otp_length = 6
 otp_ttl_seconds = 300
-callback_enabled = true   # Browser auto-POSTs signature (v0.6.0+)
-callback_grace_seconds = 10
 ```
 
 ## Authentication Flow
 
 1. PAM loads config, generates OTP (HMAC: machine_id + timestamp + secret)
-2. If callback enabled: create session file in `/run/libpam-web3/pending/`, append `?session=` to URL
+2. If `/run/libpam-web3/pending/` exists: create session file, append `?session=` to URL
 3. User sees OTP + signing URL
 4. User signs message: `Authenticate to {machine_id} with code: {otp}`
 5. Signature delivery (two paths):
-   - **Callback mode** (v0.6.0+): Browser auto-fills OTP/machine from session, POSTs signature to web3-auth-svc HTTPS → user presses Enter
-   - **Manual mode**: User copy-pastes signature into terminal
+   - **Callback mode**: Browser auto-fills OTP/machine from session, POSTs signature to auth service → user presses Enter
+   - **Manual mode**: User copy-pastes signature into terminal (fallback when no auth service running)
 6. Content-based signature detection:
    - **Raw hex** → EVM path: secp256k1 ecrecover → wallet address
    - **JSON** `{otp, machine_id, wallet_address}` → OPNet path: validate OTP → use wallet address
@@ -129,7 +122,6 @@ cargo test                            # All tests
 
 - PAM module: `target/release/libpam_web3.so`
 - CLI tool: `target/release/pam_web3_tool`
-- Web3 service: `web3-auth-svc/target/release/web3-auth-svc`
 
 ## Debian Packages
 
@@ -137,8 +129,8 @@ Two separate packages for different deployment targets:
 
 | Package | Install On | Contents |
 |---------|------------|----------|
-| `libpam-web3` | VMs (client machines) | PAM module, `web3-auth-svc` HTTPS server, signing page, self-signed TLS cert |
-| `libpam-web3-tools` | Management server | `pam_web3_tool`, signing page, contract artifacts |
+| `libpam-web3` | VMs (client machines) | PAM module, self-signed TLS cert |
+| `libpam-web3-tools` | Management server | `pam_web3_tool`, contract artifacts |
 
 ---
 
@@ -175,8 +167,6 @@ Each major component has its own documentation:
 | Directory | Documentation | Purpose |
 |-----------|---------------|---------|
 | `contracts/` | `CLAUDE.md`, `PROJECT.yaml` | Smart contract specs, encryption flows |
-| `web3-auth-svc/` | (see directory) | HTTPS signing server |
-| `signing-page/` | (see directory) | Browser signing UI |
 
 ### PROJECT.yaml Maintenance (CRITICAL)
 

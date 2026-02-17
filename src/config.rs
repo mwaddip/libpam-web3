@@ -49,12 +49,6 @@ pub struct AuthConfig {
     /// OTP validity in seconds (default: 300)
     #[serde(default = "default_otp_ttl")]
     pub otp_ttl_seconds: u64,
-    /// Enable callback-based signing (browser POSTs signature back)
-    #[serde(default = "default_callback_enabled")]
-    pub callback_enabled: bool,
-    /// Polling window in seconds after user presses Enter with empty input
-    #[serde(default = "default_callback_grace_seconds")]
-    pub callback_grace_seconds: u64,
 }
 
 // Default value functions
@@ -64,14 +58,6 @@ fn default_otp_length() -> usize {
 
 fn default_otp_ttl() -> u64 {
     300
-}
-
-fn default_callback_enabled() -> bool {
-    true
-}
-
-fn default_callback_grace_seconds() -> u64 {
-    10
 }
 
 impl Config {
@@ -129,8 +115,6 @@ signing_url = "https://example.com/sign"
         assert_eq!(config.machine.id, "my-server");
         assert_eq!(config.auth.otp_length, 6); // default
         assert_eq!(config.auth.otp_ttl_seconds, 300); // default
-        assert!(config.auth.callback_enabled); // default
-        assert_eq!(config.auth.callback_grace_seconds, 10); // default
         assert!(config.validate().is_ok());
     }
 
@@ -145,16 +129,12 @@ secret_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 signing_url = "https://auth.example.com/verify"
 otp_length = 8
 otp_ttl_seconds = 600
-callback_enabled = true
-callback_grace_seconds = 15
 "#;
 
         let config: Config = toml::from_str(config_str).unwrap();
         assert_eq!(config.machine.id, "server-prod-01");
         assert_eq!(config.auth.otp_length, 8);
         assert_eq!(config.auth.otp_ttl_seconds, 600);
-        assert!(config.auth.callback_enabled);
-        assert_eq!(config.auth.callback_grace_seconds, 15);
         assert!(config.validate().is_ok());
     }
 

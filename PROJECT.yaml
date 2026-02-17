@@ -1,11 +1,11 @@
 # libpam-web3 Project Documentation
 # Machine-readable project specification for integration and automation
-# Version: 0.7.0
+# Version: 0.8.0
 
 project:
   name: libpam-web3
   description: PAM module for Linux authentication via wallet signatures
-  version: "0.7.0"
+  version: "0.8.0"
   license: MIT
   repository: https://github.com/mwaddip/libpam-web3
   language: Rust
@@ -19,9 +19,9 @@ overview:
 
   authentication_flow:
     - User connects via SSH, sees OTP code and signing URL
-    - If callback enabled, URL includes ?session= param and session file is created
+    - If /run/libpam-web3/pending/ exists, URL includes ?session= param and session file is created
     - User signs message with wallet (EVM or OPNet)
-    - "Signature delivery: callback mode (browser auto-POSTs, user presses Enter) or manual paste"
+    - "Signature delivery: callback mode (auto when auth service running) or manual paste"
     - "Content-based detection: raw hex → EVM ecrecover, JSON → OPNet OTP validation"
     - GECOS lookup for wallet=ADDRESS in /etc/passwd
     - User logged in as mapped Linux username
@@ -45,12 +45,6 @@ architecture:
       source: src/lib.rs
       description: Core PAM module, loaded by sshd/login
 
-    web3_auth_svc:
-      binary: web3-auth-svc
-      install_path: /usr/bin/
-      source: web3-auth-svc/
-      description: HTTPS server for signing page and callback endpoints
-
     pam_web3_tool:
       binary: pam_web3_tool
       install_path: /usr/bin/
@@ -59,7 +53,7 @@ architecture:
 
   source_modules:
     lib.rs: PAM entry point, signature detection, authentication orchestration
-    callback.rs: Callback-based signing session management (file IPC with web3-auth-svc)
+    callback.rs: Callback-based signing session management (file IPC with auth service)
     config.rs: TOML configuration loading and validation
     otp.rs: OTP generation (HMAC-SHA3 with machine_id + timestamp)
     signature.rs: secp256k1 ecrecover for wallet address recovery
@@ -74,18 +68,14 @@ build:
         - target/release/libpam_web3.so
         - target/release/pam_web3_tool
 
-    web3_auth_svc:
-      command: cd web3-auth-svc && cargo build --release
-      output: web3-auth-svc/target/release/web3-auth-svc
-
     deb_package_pam:
       command: ./packaging/build-deb.sh
-      output: packaging/libpam-web3_0.7.0_amd64.deb
+      output: packaging/libpam-web3_0.8.0_amd64.deb
       description: PAM module for VMs (authentication)
 
     deb_package_tools:
       command: ./packaging/build-deb-tools.sh
-      output: packaging/libpam-web3-tools_0.7.0_amd64.deb
+      output: packaging/libpam-web3-tools_0.8.0_amd64.deb
       description: Server-side tools (key generation, encryption)
 
     tests:
@@ -127,68 +117,26 @@ configuration:
           type: integer
           default: 300
           description: OTP validity period in seconds
-        callback_enabled:
-          type: boolean
-          default: true
-          description: Enable callback-based signing (browser POSTs signature via HTTPS)
-        callback_grace_seconds:
-          type: integer
-          default: 10
-          description: Polling window after user presses Enter with empty input
-
-  web3_auth_svc_config:
-    path: /etc/web3-auth/config.toml
-    format: TOML
-    fields:
-      https.port:
-        type: integer
-        default: 8443
-        description: HTTPS listen port
-      https.bind:
-        type: list of strings (IP addresses)
-        default: ["::", "0.0.0.0"]
-        description: Bind addresses (combined with port). Default dual-stack IPv6+IPv4.
-      https.cert_path:
-        type: path
-        required: true
-        example: "/etc/libpam-web3/tls/cert.pem"
-      https.key_path:
-        type: path
-        required: true
-        example: "/etc/libpam-web3/tls/key.pem"
-      https.signing_page_path:
-        type: path
-        default: "/usr/share/libpam-web3/signing-page/index.html"
-
 files:
   configuration:
     - path: /etc/pam_web3/config.toml
       description: Main PAM module configuration
       permissions: "640"
-    - path: /etc/web3-auth/config.toml
-      description: web3-auth-svc HTTPS server configuration
-      permissions: "640"
     - path: /etc/libpam-web3/tls/cert.pem
-      description: Self-signed HTTPS certificate for callback endpoint
+      description: Self-signed TLS certificate (shared with auth service)
       permissions: "644"
     - path: /etc/libpam-web3/tls/key.pem
-      description: HTTPS private key
+      description: TLS private key
       permissions: "600"
     - path: /run/libpam-web3/pending/
-      description: Session files for callback-based signing (tmpfs, cleared on reboot)
+      description: Session files for callback-based signing (created by auth service)
       permissions: "700"
 
   binaries:
     - path: /lib/x86_64-linux-gnu/security/libpam_web3.so
       description: PAM module
-    - path: /usr/bin/web3-auth-svc
-      description: HTTPS signing server
     - path: /usr/bin/pam_web3_tool
-      description: Key generation CLI
-
-  systemd:
-    - path: /usr/lib/systemd/system/web3-auth-svc.service
-      description: web3-auth-svc systemd unit
+      description: Key generation CLI (in libpam-web3-tools package)
 
 integration:
   pam_configuration:
@@ -240,11 +188,6 @@ cli_tools:
         usage: pam_web3_tool decrypt --scheme secp256k1 --private-key-file server.key --ciphertext "..."
         output: Decrypted plaintext
 
-  signing_page:
-    path: signing-page/
-    installed_at: /usr/share/libpam-web3/signing-page/index.html
-    description: Static signing page served by VMs for wallet OTP signing
-
 smart_contract:
   path: contracts/src/AccessCredentialNFT.sol
   type: ERC-721
@@ -269,7 +212,6 @@ security:
 troubleshooting:
   logs:
     pam_module: /var/log/auth.log (grep pam_web3)
-    web3_auth_svc: journalctl -u web3-auth-svc
 
   common_issues:
     signature_recovery_failed:
@@ -285,7 +227,6 @@ dependencies:
     required:
       - libc6 (>= 2.31)
       - libpam-runtime
-      - libssl3 or libssl1.1
 
   build:
     - Rust toolchain (rustc, cargo)
@@ -293,6 +234,33 @@ dependencies:
     - Foundry (for contract deployment)
 
 changelog:
+  - version: "0.8.0"
+    date: "2026-02-17"
+    breaking_changes:
+      - component: packaging
+        change: |
+          Extracted web3-auth-svc and signing-page from libpam-web3.
+          Auth service now ships with the engine template package.
+          libpam-web3 .deb only contains the PAM module.
+      - component: pam_module
+        change: |
+          Removed callback_enabled and callback_grace_seconds from config.
+          Callback mode is now detected at runtime: if /run/libpam-web3/pending/
+          exists (created by a running auth service), callbacks are enabled.
+    removed:
+      - web3-auth-svc/ (entire directory, moved to engine)
+      - signing-page/ (moved to engine)
+      - callback_enabled config field
+      - callback_grace_seconds config field
+      - web3-auth-svc binary from libpam-web3 .deb
+      - signing-page from libpam-web3-tools .deb
+      - systemd unit for web3-auth-svc from .deb
+    config_changes:
+      - "PAM: removed auth.callback_enabled (now runtime-detected)"
+      - "PAM: removed auth.callback_grace_seconds (now constant 10s)"
+    version_bumps:
+      deb_packages: "0.7.0 -> 0.8.0"
+
   - version: "0.7.0"
     date: "2026-02-17"
     breaking_changes:

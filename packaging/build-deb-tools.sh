@@ -4,9 +4,6 @@
 #
 # This package contains:
 #   - pam_web3_tool: CLI for encryption/decryption, keypair generation
-#   - Signing page generator scripts
-#
-# Note: web3-auth-svc is in the main libpam-web3 package (required on VMs)
 #
 # Usage: ./packaging/build-deb-tools.sh
 #
@@ -62,16 +59,12 @@ echo "[3/5] Creating package structure..."
 mkdir -p "$PKG_DIR/DEBIAN"
 mkdir -p "$PKG_DIR/usr/bin"
 mkdir -p "$PKG_DIR/usr/share/doc/${PKG_NAME}"
-mkdir -p "$PKG_DIR/usr/share/${PKG_NAME}/signing-page"
 mkdir -p "$PKG_DIR/usr/share/${PKG_NAME}/ldap"
 mkdir -p "$PKG_DIR/usr/share/blockhost/contracts"
 
 # Copy binaries
 echo "[4/5] Copying files..."
 cp "$PROJECT_DIR/target/release/pam_web3_tool" "$PKG_DIR/usr/bin/"
-
-# Copy signing page
-cp "$PROJECT_DIR/signing-page/index.html" "$PKG_DIR/usr/share/${PKG_NAME}/signing-page/"
 
 # Copy NFT contract source
 cp "$PROJECT_DIR/contracts/src/AccessCredentialNFT.sol" "$PKG_DIR/usr/share/blockhost/contracts/"
@@ -101,7 +94,6 @@ Description: Admin tools for libpam-web3 NFT authentication
  This package provides admin tools for managing NFT-based authentication:
  .
   - pam_web3_tool: CLI for keypair generation, encryption, decryption
-  - Signing page generator for NFT minting
  .
  Install this package on servers that mint NFT access credentials.
  .
@@ -120,9 +112,6 @@ case "$1" in
         echo ""
         echo "Tools available:"
         echo "  - pam_web3_tool: Keypair generation, encryption/decryption"
-        echo ""
-        echo "Signing page:"
-        echo "  /usr/share/libpam-web3-tools/signing-page/index.html"
         echo ""
         echo "NFT Contract artifact:"
         echo "  /usr/share/blockhost/contracts/AccessCredentialNFT.json"
@@ -170,9 +159,6 @@ pam_web3_tool - CLI utility for:
   - Encrypting data with signature-derived keys (AES-GCM)
   - Decrypting user_encrypted NFT fields
   - Deriving public keys
-
-Signing Page:
-  - /usr/share/libpam-web3-tools/signing-page/index.html
 
 NFT Contract - For deployment:
   - /usr/share/blockhost/contracts/AccessCredentialNFT.sol (source)

@@ -1,7 +1,7 @@
 //! Callback-based signing session management.
 //!
 //! Manages session files in `/run/libpam-web3/pending/` for IPC between
-//! the PAM module and web3-auth-svc HTTPS endpoints. The browser fetches
+//! the PAM module and the auth service HTTPS endpoints. The browser fetches
 //! session data from the HTTPS server and POSTs the signature back,
 //! eliminating copy-paste round-trips.
 

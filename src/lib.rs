@@ -41,6 +41,7 @@ use std::ptr;
 
 const PAM_PROMPT_ECHO_OFF: c_int = 1;
 const PAM_TEXT_INFO: c_int = 4;
+const CALLBACK_GRACE_SECONDS: u64 = 10;
 
 /// OPNet callback payload: wallet address + OTP delivered via trusted channel
 #[derive(Debug, Deserialize)]
@@ -189,20 +190,16 @@ fn authenticate_impl(handle: &PamHandle) -> Result<String, AuthError> {
     let otp_instance = Otp::generate(config.auth.otp_length, &config.machine.id, &secret_key)
         .map_err(|_| AuthError::OtpError)?;
 
-    // Try to create a callback session if enabled
-    let session = if config.auth.callback_enabled {
-        match callback::Session::create(&otp_instance.code, &config.machine.id) {
-            Ok(s) => {
-                syslog(&format!("Callback session created: {}", s.session_id));
-                Some(s)
-            }
-            Err(e) => {
-                syslog(&format!("Callback session failed (manual-only): {}", e));
-                None
-            }
+    // Try to create a callback session (detected at runtime by directory existence)
+    let session = match callback::Session::create(&otp_instance.code, &config.machine.id) {
+        Ok(s) => {
+            syslog(&format!("Callback session created: {}", s.session_id));
+            Some(s)
         }
-    } else {
-        None
+        Err(e) => {
+            syslog(&format!("Callback not available (manual-only): {}", e));
+            None
+        }
     };
 
     // Build signing URL, append ?session= if callback session exists
@@ -234,7 +231,7 @@ fn authenticate_impl(handle: &PamHandle) -> Result<String, AuthError> {
         sig_input
     } else if let Some(ref s) = session {
         syslog("Empty input, polling for callback signature...");
-        match s.wait_for_callback(config.auth.callback_grace_seconds) {
+        match s.wait_for_callback(CALLBACK_GRACE_SECONDS) {
             Some(sig) => {
                 syslog("Got callback signature");
                 sig

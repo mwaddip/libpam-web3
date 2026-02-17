@@ -117,9 +117,6 @@ default (submodule)       S8  P10 E7  C5  I8  A8  L7
 
 pam_web3_tool             S7  P9  E6  C6  I7  A8  L6
   Crypto CLI. Performance matters (runs per SSH login). Security is non-negotiable.
-
-web3-auth-svc             S7  P9  E8  C5  I7  A7  L7
-  Long-running auth service. Must not crash, must not leak.
 ```
 
 ### blockhost-broker

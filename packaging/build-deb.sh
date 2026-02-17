@@ -4,7 +4,6 @@
 #
 # This package contains:
 #   - PAM module (pam_web3.so) for wallet-based authentication
-#   - web3-auth-svc HTTPS server for callback-based signing
 #   - Configuration for PAM authentication on VMs
 #
 # For server-side tools (pam_web3_tool), see build-deb-tools.sh
@@ -18,7 +17,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-VERSION="0.7.0"
+VERSION="0.8.0"
 ARCH="amd64"
 PKG_NAME="libpam-web3"
 PKG_DIR="$SCRIPT_DIR/${PKG_NAME}_${VERSION}_${ARCH}"
@@ -30,33 +29,21 @@ rm -rf "$PKG_DIR"
 rm -f "$SCRIPT_DIR/${PKG_NAME}_${VERSION}_${ARCH}.deb"
 
 # Build PAM module
-echo "[1/5] Building PAM module..."
+echo "[1/4] Building PAM module..."
 cd "$PROJECT_DIR"
 cargo build --release
 
-echo "[2/5] Building web3-auth-svc..."
-cd "$PROJECT_DIR/web3-auth-svc"
-cargo build --release
-
 # Create package directory structure
-echo "[3/5] Creating package structure..."
+echo "[2/4] Creating package structure..."
 mkdir -p "$PKG_DIR/DEBIAN"
 mkdir -p "$PKG_DIR/lib/x86_64-linux-gnu/security"
-mkdir -p "$PKG_DIR/usr/bin"
-mkdir -p "$PKG_DIR/usr/lib/systemd/system"
 mkdir -p "$PKG_DIR/etc/pam_web3"
-mkdir -p "$PKG_DIR/etc/web3-auth"
 mkdir -p "$PKG_DIR/usr/share/doc/${PKG_NAME}"
 mkdir -p "$PKG_DIR/usr/share/doc/${PKG_NAME}/examples"
-mkdir -p "$PKG_DIR/usr/share/${PKG_NAME}/signing-page"
 
 # Copy binaries
-echo "[4/5] Copying files..."
+echo "[3/4] Copying files..."
 cp "$PROJECT_DIR/target/release/libpam_web3.so" "$PKG_DIR/lib/x86_64-linux-gnu/security/"
-cp "$PROJECT_DIR/web3-auth-svc/target/release/web3-auth-svc" "$PKG_DIR/usr/bin/"
-
-# Copy signing page
-cp "$PROJECT_DIR/signing-page/index.html" "$PKG_DIR/usr/share/${PKG_NAME}/signing-page/"
 
 # Create control file
 cat > "$PKG_DIR/DEBIAN/control" << EOF
@@ -65,8 +52,7 @@ Version: ${VERSION}
 Section: admin
 Priority: optional
 Architecture: ${ARCH}
-Depends: libc6 (>= 2.31), libpam-runtime, libssl3 | libssl1.1
-Suggests: libpam-web3-tools
+Depends: libc6 (>= 2.31), libpam-runtime
 Maintainer: libpam-web3 maintainers
 Homepage: https://github.com/mwaddip/libpam-web3
 Description: PAM module for wallet-based authentication
@@ -75,15 +61,12 @@ Description: PAM module for wallet-based authentication
  .
  Install this package on VMs/servers where users authenticate via wallet.
  .
- This package includes:
-  - PAM module (pam_web3.so)
-  - web3-auth-svc HTTPS server for callback-based signing
- .
  Features:
   - EVM wallet signature verification (secp256k1 ecrecover)
   - OPNet callback support (OTP validation + trusted address)
   - GECOS-based username mapping (wallet=ADDRESS)
   - Challenge-response OTP authentication
+  - Runtime callback detection (no config needed)
  .
  For admin tools (key generation, encryption), install libpam-web3-tools.
 EOF
@@ -110,7 +93,6 @@ case "$1" in
 
         # Create config directory permissions
         chmod 750 /etc/pam_web3 2>/dev/null || true
-        chmod 750 /etc/web3-auth 2>/dev/null || true
 
         # Generate self-signed TLS certificate if not present
         TLS_DIR="/etc/libpam-web3/tls"
@@ -128,25 +110,20 @@ case "$1" in
             fi
         fi
 
-        # Reload systemd if available
-        if command -v systemctl >/dev/null 2>&1; then
-            systemctl daemon-reload || true
-        fi
-
         echo ""
         echo "=== libpam-web3 installed ==="
         echo ""
-        echo "Configuration files:"
+        echo "Configuration:"
         echo "  /etc/pam_web3/config.toml   (PAM module)"
-        echo "  /etc/web3-auth/config.toml  (HTTPS signing server)"
         echo ""
         echo "Quick setup:"
-        echo "1. Edit configuration files with your settings"
-        echo "2. Start the signing server:"
-        echo "   systemctl enable --now web3-auth-svc"
-        echo "3. Create user with wallet address in GECOS:"
+        echo "1. Edit configuration with your settings"
+        echo "2. Create user with wallet address in GECOS:"
         echo "   useradd -m -c 'wallet=0xADDRESS,nft=TOKEN_ID' username"
-        echo "4. Configure PAM (see /usr/share/doc/libpam-web3/)"
+        echo "3. Configure PAM (see /usr/share/doc/libpam-web3/)"
+        echo ""
+        echo "Note: Callback mode activates automatically when an auth service"
+        echo "creates /run/libpam-web3/pending/. No config flag needed."
         echo ""
         ;;
 esac
@@ -159,17 +136,6 @@ chmod 755 "$PKG_DIR/DEBIAN/postinst"
 cat > "$PKG_DIR/DEBIAN/prerm" << 'EOF'
 #!/bin/bash
 set -e
-
-case "$1" in
-    remove|purge)
-        # Stop service if running
-        if command -v systemctl >/dev/null 2>&1; then
-            systemctl stop web3-auth-svc 2>/dev/null || true
-            systemctl disable web3-auth-svc 2>/dev/null || true
-        fi
-        ;;
-esac
-
 exit 0
 EOF
 chmod 755 "$PKG_DIR/DEBIAN/prerm"
@@ -182,8 +148,6 @@ set -e
 case "$1" in
     purge)
         rm -rf /etc/pam_web3 2>/dev/null || true
-        rm -rf /etc/web3-auth 2>/dev/null || true
-        rm -rf /etc/libpam-web3 2>/dev/null || true
         rm -rf /run/libpam-web3 2>/dev/null || true
         rm -f /lib/x86_64-linux-gnu/security/pam_web3.so 2>/dev/null || true
         ;;
@@ -214,52 +178,6 @@ signing_url = "https://your-signing-page.example.com"
 # OTP settings
 otp_length = 6
 otp_ttl_seconds = 300
-# Callback-based signing (browser POSTs signature back automatically)
-callback_enabled = true
-callback_grace_seconds = 10
-EOF
-
-# Create web3-auth config
-cat > "$PKG_DIR/etc/web3-auth/config.toml" << 'EOF'
-# web3-auth-svc configuration
-# HTTPS server for callback-based signing
-
-[https]
-port = 8443
-bind = ["::"]
-cert_path = "/etc/libpam-web3/tls/cert.pem"
-key_path = "/etc/libpam-web3/tls/key.pem"
-signing_page_path = "/usr/share/libpam-web3/signing-page/index.html"
-EOF
-
-# Create systemd service file
-cat > "$PKG_DIR/usr/lib/systemd/system/web3-auth-svc.service" << 'EOF'
-[Unit]
-Description=Web3 Authentication Signing Server
-Documentation=https://github.com/mwaddip/libpam-web3
-After=network.target
-
-[Service]
-Type=simple
-ExecStartPre=/bin/mkdir -p /run/libpam-web3/pending
-ExecStart=/usr/bin/web3-auth-svc --config /etc/web3-auth/config.toml --foreground
-Restart=always
-RestartSec=5
-Environment=RUST_LOG=info
-
-# Security hardening
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
-ReadWritePaths=/run/libpam-web3
-
-# Runtime directories
-RuntimeDirectory=libpam-web3
-RuntimeDirectoryMode=0755
-
-[Install]
-WantedBy=multi-user.target
 EOF
 
 # Create documentation
@@ -279,6 +197,10 @@ Authentication Flow
 4. PAM module verifies signature and recovers wallet address
 5. PAM matches wallet address against /etc/passwd GECOS (wallet=ADDRESS)
 6. User authenticated as matching Linux user
+
+Callback mode is detected at runtime: if /run/libpam-web3/pending/
+exists (created by a running auth service), callbacks are enabled
+automatically. Otherwise, the user pastes the signature manually.
 
 Supported Signature Types
 -------------------------
@@ -318,12 +240,6 @@ Quick Setup
 
    systemctl restart sshd
 
-Requirements
-------------
-
-- web3-auth-svc must be running (systemctl enable --now web3-auth-svc)
-- User's wallet address must match GECOS entry
-
 For admin tools (key generation, encryption), install libpam-web3-tools.
 EOF
 
@@ -353,12 +269,10 @@ find "$PKG_DIR" -type f -exec chmod 644 {} \;
 chmod 755 "$PKG_DIR/DEBIAN/postinst"
 chmod 755 "$PKG_DIR/DEBIAN/prerm"
 chmod 755 "$PKG_DIR/DEBIAN/postrm"
-chmod 755 "$PKG_DIR/usr/bin/"*
 chmod 640 "$PKG_DIR/etc/pam_web3/config.toml"
-chmod 640 "$PKG_DIR/etc/web3-auth/config.toml"
 
 # Build the package
-echo "[5/5] Building .deb package..."
+echo "[4/4] Building .deb package..."
 cd "$SCRIPT_DIR"
 dpkg-deb --build --root-owner-group "$PKG_DIR"
 
@@ -383,7 +297,6 @@ if [ -f "$DEB_FILE" ]; then
     echo ""
     echo "Cleaning build caches..."
     cd "$PROJECT_DIR" && cargo clean
-    cd "$PROJECT_DIR/web3-auth-svc" && cargo clean
 else
     echo "ERROR: Package build failed"
     exit 1
