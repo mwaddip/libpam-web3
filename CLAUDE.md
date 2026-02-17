@@ -158,6 +158,15 @@ git diff --cached --name-only | xargs grep -l -E '(0x[a-fA-F0-9]{64}|password|se
 - `config.toml` with real credentials
 - `ldap.secret`, `server.key`
 
+### Auth Boundary Review (P10)
+
+**When touching any auth code path, ask these questions:**
+
+1. **Proof vs assertion**: For every value the auth flow trusts, does the user *cryptographically prove* it, or merely *assert* it? If asserted, what stops an attacker who can see the same screen from forging it?
+2. **Trust boundary per input source**: The same data format from different channels (terminal paste vs callback file vs network) may carry different trust levels. Gate trust decisions on the source, not only the content.
+3. **Displayed secrets are public**: Any value shown to the user (OTP, machine_id, signing URL) must be treated as attacker-known. Auth decisions must not depend solely on knowledge of displayed values.
+4. **Fail-secure on every branch**: Trace every early return and error path — does it deny access? A missed error check is an auth bypass.
+
 ---
 
 ## Subproject Documentation

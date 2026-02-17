@@ -226,7 +226,6 @@ fn authenticate_impl(handle: &PamHandle) -> Result<String, AuthError> {
     let sig_input = pam_prompt(handle, PAM_PROMPT_ECHO_OFF, prompt_text)?
         .unwrap_or_default();
 
-    // Resolve signature: manual input or callback polling
     // Resolve signature and track source.
     // OPNet JSON is only trusted from callbacks (auth service validates the
     // wallet signature before writing the .sig file).  Manual paste must
@@ -280,6 +279,11 @@ fn authenticate_impl(handle: &PamHandle) -> Result<String, AuthError> {
                 AuthError::OtpExpired
             })?;
         syslog("OPNet OTP verified");
+
+        if opnet.wallet_address.is_empty() {
+            syslog("OPNet callback has empty wallet_address");
+            return Err(AuthError::InvalidSignature);
+        }
 
         opnet.wallet_address
     } else {

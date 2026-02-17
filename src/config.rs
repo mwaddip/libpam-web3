@@ -76,9 +76,27 @@ impl Config {
 
     /// Validate the configuration
     fn validate(&self) -> Result<(), ConfigError> {
-        if self.machine.secret_key.is_none() {
-            return Err(ConfigError::MissingField("machine.secret_key"));
+        let key = self
+            .machine
+            .secret_key
+            .as_ref()
+            .ok_or(ConfigError::MissingField("machine.secret_key"))?;
+
+        // Secret key must be at least 16 bytes (32 hex chars) for HMAC security
+        let hex_str = key.strip_prefix("0x").unwrap_or(key);
+        if hex_str.len() < 32 {
+            return Err(ConfigError::InvalidConfig(
+                "machine.secret_key must be at least 16 bytes (32 hex chars)".to_string(),
+            ));
         }
+
+        // OTP length must be 4..=19 (10^20 overflows u64)
+        if self.auth.otp_length < 4 || self.auth.otp_length > 19 {
+            return Err(ConfigError::InvalidConfig(
+                "auth.otp_length must be between 4 and 19".to_string(),
+            ));
+        }
+
         Ok(())
     }
 
@@ -157,7 +175,7 @@ signing_url = "https://example.com/sign"
         let config_str = r#"
 [machine]
 id = "my-server"
-secret_key = "0xdeadbeef"
+secret_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 [auth]
 signing_url = "https://example.com/sign"
@@ -165,7 +183,8 @@ signing_url = "https://example.com/sign"
 
         let config: Config = toml::from_str(config_str).unwrap();
         let bytes = config.secret_key_bytes().unwrap();
-        assert_eq!(bytes, vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(bytes[0], 0x01);
+        assert_eq!(bytes.len(), 32);
     }
 
     #[test]
@@ -173,7 +192,7 @@ signing_url = "https://example.com/sign"
         let config_str = r#"
 [machine]
 id = "my-server"
-secret_key = "deadbeef"
+secret_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 [auth]
 signing_url = "https://example.com/sign"
@@ -181,6 +200,51 @@ signing_url = "https://example.com/sign"
 
         let config: Config = toml::from_str(config_str).unwrap();
         let bytes = config.secret_key_bytes().unwrap();
-        assert_eq!(bytes, vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(bytes[0], 0x01);
+        assert_eq!(bytes.len(), 32);
+    }
+
+    #[test]
+    fn test_short_secret_key_rejected() {
+        let config_str = r#"
+[machine]
+id = "my-server"
+secret_key = "0xdeadbeef"
+
+[auth]
+signing_url = "https://example.com/sign"
+"#;
+
+        let config: Config = toml::from_str(config_str).unwrap();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_otp_length_bounds() {
+        // Too short
+        let config_str = r#"
+[machine]
+id = "my-server"
+secret_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+[auth]
+signing_url = "https://example.com/sign"
+otp_length = 3
+"#;
+        let config: Config = toml::from_str(config_str).unwrap();
+        assert!(config.validate().is_err());
+
+        // Too long (would overflow u64)
+        let config_str = r#"
+[machine]
+id = "my-server"
+secret_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+[auth]
+signing_url = "https://example.com/sign"
+otp_length = 20
+"#;
+        let config: Config = toml::from_str(config_str).unwrap();
+        assert!(config.validate().is_err());
     }
 }
