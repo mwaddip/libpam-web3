@@ -1,14 +1,12 @@
 # libpam-web3
 
-Authenticate to Linux servers using your Ethereum wallet. No passwords, no SSH keys - just your wallet signature.
+Authenticate to Linux servers using wallet signatures. No passwords, no SSH keys - just your wallet signature.
 
-## Authentication Modes
+Supports two verification paths:
+- **EVM**: secp256k1 ecrecover from raw hex signature
+- **OPNet**: JSON callback with OTP validation and trusted wallet address
 
-### Wallet Mode (Default)
-Simple file-based wallet → username mapping. Perfect for small deployments.
-
-### NFT Mode
-Enterprise-grade authentication via NFT ownership on EVM blockchains, with LDAP integration for username management and revocation.
+Wallet addresses are chain-agnostic (EVM `0x...`, Bitcoin `bc1q...`, Solana, etc.) and matched case-insensitively against the GECOS field in `/etc/passwd`.
 
 ## How It Works
 
@@ -30,7 +28,7 @@ Enterprise-grade authentication via NFT ownership on EVM blockchains, with LDAP 
 │     │──── signature ────────────>│  (paste or auto-callback)     │
 │     │                            │                               │
 │     │                            │── recover wallet address      │
-│     │                            │── verify ownership            │
+│     │                            │── GECOS wallet lookup         │
 │     │                            │── map to Linux username       │
 │     │                            │                               │
 │     │<── LOGIN SUCCESS ──────────│                               │
@@ -82,7 +80,7 @@ def ssh_with_wallet(host, username, private_key_hex):
     return paramiko.SSHClient()._transport = transport
 
 # Usage
-WALLET_PRIVATE_KEY = "0x..."  # The wallet that owns the NFT or is in wallets file
+WALLET_PRIVATE_KEY = "0x..."  # The wallet matching the GECOS field
 ssh_with_wallet("server.example.com", "myuser", WALLET_PRIVATE_KEY)
 ```
 
@@ -246,7 +244,7 @@ ssh_with_wallet(hostname, "myuser", WALLET_KEY)
 ### Security Considerations
 
 - Store the wallet private key securely (environment variable, secrets manager)
-- The wallet must own the required NFT (NFT mode) or be listed in the wallets file (wallet mode)
+- The wallet address must be in the user's GECOS field (`wallet=ADDRESS`)
 - Consider using a dedicated wallet for AI agent access with limited permissions
 
 ## Quick Start
@@ -261,11 +259,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 sudo apt install libpam0g-dev  # Debian/Ubuntu
 sudo dnf install pam-devel     # Fedora/RHEL
 
-# Build (wallet mode only)
+# Build
 cargo build --release
-
-# Build with NFT support
-cargo build --release --features nft
 ```
 
 ### 2. Install
@@ -277,9 +272,8 @@ sudo cp target/release/libpam_web3.so /lib/security/pam_web3.so
 # Create config directory
 sudo mkdir -p /etc/pam_web3
 
-# Copy example config (choose wallet or nft mode)
-sudo cp examples/config-wallet.toml /etc/pam_web3/config.toml
-sudo cp examples/wallets /etc/pam_web3/wallets
+# Copy example config
+sudo cp examples/config.toml /etc/pam_web3/config.toml
 
 # Edit config with your settings
 sudo nano /etc/pam_web3/config.toml
@@ -303,23 +297,45 @@ See `examples/pam-sshd.conf` for more configuration options including:
 - Web3 auth for a group of users
 - Web3 auth for all users
 
-### 4. Add Authorized Wallets (Wallet Mode)
+### 4. Add Authorized Wallets
 
-Edit `/etc/pam_web3/wallets`:
+Set the wallet address in the user's GECOS field:
+
+```bash
+# Create user with wallet address
+sudo useradd -m -c "wallet=0x1234567890abcdef1234567890abcdef12345678" alice
+
+# Or update existing user's GECOS field
+sudo usermod -c "wallet=0x1234567890abcdef1234567890abcdef12345678" alice
+
+# Multiple fields are comma-separated
+sudo usermod -c "Alice,wallet=0xAbCd...1234,nft=5" alice
+```
+
+Verify the GECOS field:
+```bash
+getent passwd alice
+# alice:x:1001:1001:wallet=0x1234...5678:/home/alice:/bin/bash
+```
+
+### 5. Configure SSHD
+
+Edit `/etc/ssh/sshd_config`:
 
 ```
-# Format: wallet_address:linux_username
-0x1234567890abcdef1234567890abcdef12345678:alice
-0xabcdef1234567890abcdef1234567890abcdef12:bob
+ChallengeResponseAuthentication yes
+UsePAM yes
 ```
 
-### 5. Host the Signing Page
+Restart SSH:
 
-Deploy `signing-page/index.html` to any web server, or use it locally.
+```bash
+sudo systemctl restart sshd
+```
 
 ## Configuration
 
-### Wallet Mode (`/etc/pam_web3/config.toml`)
+`/etc/pam_web3/config.toml`:
 
 ```toml
 [machine]
@@ -327,63 +343,69 @@ id = "my-server"
 secret_key = "0x<your-64-char-hex-key>"  # openssl rand -hex 32
 
 [auth]
-mode = "wallet"
-signing_url = "https://your-server.com/sign"
-otp_length = 6
-otp_ttl_seconds = 300
-callback_enabled = true     # Browser auto-POSTs signature
-callback_grace_seconds = 10
-
-[wallet]
-wallets_path = "/etc/pam_web3/wallets"
+signing_url = "https://your-signing-page.example.com"
+otp_length = 6           # 4-19 (default: 6)
+otp_ttl_seconds = 300    # default: 300
 ```
 
-### NFT Mode (`/etc/pam_web3/config.toml`)
+Callback mode (browser auto-posts signature) is detected at runtime - if `/run/libpam-web3/pending/` exists, callback sessions are created automatically. No config flag needed.
 
-```toml
-[machine]
-id = "server-prod-01"
-secret_key = "0x<your-64-char-hex-key>"  # openssl rand -hex 32
+## GECOS Format
 
-[auth]
-mode = "nft"
-nft_lookup = "passwd"  # or "ldap"
-signing_url = "https://auth.example.com/verify"
-callback_enabled = true
-callback_grace_seconds = 10
-
-[blockchain]
-socket_path = "/run/web3-auth/web3-auth.sock"
-chain_id = 1
-nft_contract = "0x1234..."
-
-# Optional LDAP config (only if nft_lookup = "ldap")
-# [ldap]
-# server = "ldap://localhost:389"
-# base_dn = "ou=nft,dc=example,dc=com"
-# bind_dn = "cn=pam,dc=example,dc=com"
-# bind_password_file = "/etc/pam_web3/ldap.secret"
+```
+wallet=0x1234...abcd,nft=5
 ```
 
-## NFT Mode Setup
+- `wallet=ADDRESS` - required for authentication (case-insensitive match, chain-agnostic)
+- `nft=TOKEN_ID` - optional metadata (token ID for reference)
+- Can include other comma-separated fields: `Alice,wallet=0x...,nft=5`
 
-NFT mode requires additional components:
+## Client-Side Signing Page
 
-1. **web3-auth-svc daemon** - Handles blockchain queries
-   ```bash
-   cd web3-auth-svc
-   cargo build --release
-   sudo cp target/release/web3-auth-svc /usr/local/bin/
-   ```
+The NFT contains an embedded signing page in its `animation_url` field. Users can extract and host this locally to sign authentication messages with MetaMask.
 
-2. **LDAP server** - Stores NFT → username mappings and revocation status
+### Why Local Hosting?
 
-3. **AccessCredentialNFT contract** - Deploy from `contracts/`
+Browsers (MetaMask, Firefox) block wallet connections on `file://` URLs for security reasons. The scripts below extract the signing page and serve it via `http://localhost` so MetaMask can connect.
 
-4. **Machine keypair** - Generate with:
-   ```bash
-   cargo run --features nft --bin pam_web3_tool -- generate-keypair
-   ```
+### Linux / macOS
+
+```bash
+# Extract and host signing page from NFT
+./scripts/extract-signing-page.sh \
+  --contract 0xYourContractAddress \
+  --token-id 0
+
+# With custom RPC
+./scripts/extract-signing-page.sh \
+  --rpc-url https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY \
+  --contract 0xYourContractAddress \
+  --token-id 5 \
+  --port 9000
+```
+
+Requirements: `curl` and `python3` (pre-installed on most Linux/macOS systems)
+
+### Windows (PowerShell)
+
+```powershell
+# Extract and host signing page from NFT
+.\scripts\extract-signing-page.ps1 -Contract "0xYourContractAddress" -TokenId 0
+
+# With custom RPC
+.\scripts\extract-signing-page.ps1 `
+  -RpcUrl "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY" `
+  -Contract "0xYourContractAddress" `
+  -TokenId 5 `
+  -Port 9000
+```
+
+Requirements: PowerShell 5.1+ (included in Windows 10/11)
+
+Note: On Windows, you may need to run as Administrator or add a URL reservation:
+```powershell
+netsh http add urlacl url=http://+:8080/ user=Everyone
+```
 
 ## Security
 
@@ -398,11 +420,10 @@ NFT mode requires additional components:
 
 ### Threat Model
 
-- **Stolen wallet file**: Only contains public addresses - no secrets
+- **Stolen config**: Only contains machine ID and HMAC key - no wallet private keys
 - **Replay attacks**: OTP bound to timestamp, expires quickly
 - **Man-in-the-middle**: Signature is over specific OTP + machine ID
 - **Compromised signing page**: Attacker can't forge signatures without wallet private key
-- **NFT revocation**: LDAP-based revocation immediately blocks access
 
 ## File Structure
 
@@ -411,24 +432,20 @@ libpam-web3/
 ├── Cargo.toml              # Rust package manifest
 ├── src/
 │   ├── lib.rs              # PAM module entry point
-│   ├── callback.rs         # Callback-based signing sessions
+│   ├── callback.rs         # Callback-based signing sessions (file IPC)
 │   ├── config.rs           # Configuration loading
 │   ├── otp.rs              # OTP generation and verification
-│   ├── signature.rs        # Ethereum signature recovery
-│   ├── wallet_auth.rs      # Wallet mode authentication
-│   ├── blockchain.rs       # NFT blockchain client (nft feature)
-│   ├── ldap.rs             # LDAP client (nft feature)
-│   ├── ecies.rs            # Encryption schemes (nft feature)
+│   ├── signature.rs        # secp256k1 ecrecover
+│   ├── passwd_lookup.rs    # GECOS wallet address lookup
+│   ├── ecies.rs            # Encryption schemes (ECIES, AES-GCM, x25519)
 │   └── bin/
-│       └── pam_web3_tool.rs  # Admin CLI tool (nft feature)
-├── web3-auth-svc/          # Blockchain verification daemon
-├── contracts/              # AccessCredentialNFT smart contract
-├── signing-page/
-│   └── index.html          # Web interface for signing
+│       └── pam_web3_tool.rs  # CLI tool (keypair gen, encryption)
+├── contracts/              # AccessCredentialNFT smart contract (ERC-721)
+├── scripts/
+│   ├── extract-signing-page.sh   # NFT signing page extractor (Linux/macOS)
+│   └── extract-signing-page.ps1  # NFT signing page extractor (Windows)
 └── examples/
-    ├── config-wallet.toml  # Wallet mode configuration
-    ├── config-nft.toml     # NFT mode configuration
-    ├── wallets             # Example wallets file
+    ├── config.toml         # Example configuration
     └── pam-sshd.conf       # Example PAM configuration
 ```
 
@@ -437,11 +454,6 @@ libpam-web3/
 - Linux with PAM support
 - Rust 1.70+
 - PAM development headers (`libpam0g-dev` or `pam-devel`)
-
-For NFT mode additionally:
-- Running web3-auth-svc daemon
-- LDAP server
-- EVM-compatible blockchain (Ethereum, Polygon, etc.)
 
 ## Troubleshooting
 

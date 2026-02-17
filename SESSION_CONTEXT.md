@@ -16,7 +16,9 @@ Consolidated two auth paths (wallet-file lookup + blockchain NFT query) into one
 
 Fixed `web3-auth-svc` EADDRINUSE when binding both `[::]` and `0.0.0.0`. Changed default to `["::]"` only.
 
-### 3. Extract web3-auth-svc (v0.8.0)
+### 3. Extract web3-auth-svc (v0.8.0, a715e29)
+
+
 
 Moved `web3-auth-svc/` and `signing-page/` out of libpam-web3. Auth service now ships with the engine template package. Callback mode is detected at runtime (directory existence) instead of config flag.
 
@@ -96,6 +98,25 @@ No feature flags. All deps unconditional:
 - `libc` 0.2, `thiserror` 2, `serde` 1, `serde_json` 1, `toml` 0.8
 - `ecies` 0.2, `aes-gcm` 0.10, `crypto_box` 0.9, `base64` 0.22, `hkdf` 0.12, `sha2` 0.10, `clap` 4
 
+### 4. Security hardening (75492fb, 423b99c)
+
+- Fixed auth bypass: OPNet JSON from manual paste now rejected (only callback)
+- Added config validation: secret_key min 16 bytes, otp_length 4-19
+- Added empty wallet_address check on OPNet path
+- Added P10 Auth Boundary Review checklist to CLAUDE.md
+
+### 5. IPC contract documentation (fe7019f)
+
+- Added complete IPC Contracts section to CLAUDE.md (session files, .sig files, trust model)
+
+### 6. User-facing doc cleanup
+
+- Rewrote `README.md` for current architecture (removed wallet mode, NFT mode, web3-auth-svc, LDAP, blockchain, feature flags)
+- Deleted `docs/NFT_MODE_SETUP.md` (entirely stale)
+- Deleted `PLAN.md` (old planning doc)
+- Replaced `examples/config-wallet.toml` and `examples/config-nft.toml` with single `examples/config.toml`
+- Deleted `examples/wallets` (wallet file no longer used)
+
 ## Known Issues / Warnings
 
-- `examples/config-nft.toml` and `examples/config-wallet.toml` are stale (reference removed config sections) — should be updated or removed
+None currently tracked.
