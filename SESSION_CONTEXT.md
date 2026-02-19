@@ -49,9 +49,7 @@ src/
 ├── otp.rs           # OTP generation (HMAC-SHA3, unchanged)
 ├── signature.rs     # secp256k1 ecrecover (unchanged)
 ├── passwd_lookup.rs # GECOS wallet=ADDRESS lookup (case-insensitive)
-├── ecies.rs         # Encryption schemes (unchanged, used by pam_web3_tool)
-└── bin/
-    └── pam_web3_tool.rs  # CLI tool (unchanged)
+└── passwd_lookup.rs # GECOS wallet=ADDRESS lookup (case-insensitive)
 
 contracts/           # Solidity: AccessCredentialNFT (ERC-721)
 ```

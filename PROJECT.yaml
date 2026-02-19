@@ -45,12 +45,6 @@ architecture:
       source: src/lib.rs
       description: Core PAM module, loaded by sshd/login
 
-    pam_web3_tool:
-      binary: pam_web3_tool
-      install_path: /usr/bin/
-      source: src/bin/pam_web3_tool.rs
-      description: CLI for keypair generation and encryption
-
   source_modules:
     lib.rs: PAM entry point, signature detection, authentication orchestration
     callback.rs: Callback-based signing session management (file IPC with auth service)
@@ -58,25 +52,17 @@ architecture:
     otp.rs: OTP generation (HMAC-SHA3 with machine_id + timestamp)
     signature.rs: secp256k1 ecrecover for wallet address recovery
     passwd_lookup.rs: GECOS-based wallet address to username lookup (wallet=ADDRESS)
-    ecies.rs: ECIES encryption (secp256k1, x25519, AES-GCM)
-
 build:
   commands:
     default:
       command: cargo build --release
       outputs:
         - target/release/libpam_web3.so
-        - target/release/pam_web3_tool
 
     deb_package_pam:
       command: ./packaging/build-deb.sh
       output: packaging/libpam-web3_0.8.0_amd64.deb
       description: PAM module for VMs (authentication)
-
-    deb_package_tools:
-      command: ./packaging/build-deb-tools.sh
-      output: packaging/libpam-web3-tools_0.8.0_amd64.deb
-      description: Server-side tools (key generation, encryption)
 
     tests:
       command: cargo test
@@ -135,9 +121,6 @@ files:
   binaries:
     - path: /lib/x86_64-linux-gnu/security/libpam_web3.so
       description: PAM module
-    - path: /usr/bin/pam_web3_tool
-      description: Key generation CLI (in libpam-web3-tools package)
-
 integration:
   pam_configuration:
     file: /etc/pam.d/sshd
@@ -164,29 +147,6 @@ integration:
         useradd -m -c "wallet=0x1234...abcd,nft=0" johndoe
         # Or update existing:
         usermod -c "wallet=0x1234...abcd,nft=0" johndoe
-
-cli_tools:
-  pam_web3_tool:
-    commands:
-      generate-keypair:
-        description: Generate secp256k1 ECIES keypair
-        usage: pam_web3_tool generate-keypair --output server.key --show-pubkey
-        output: Writes private key to file, prints public key to stdout
-
-      encrypt-symmetric:
-        description: Encrypt data with signature-derived AES-256-GCM key
-        usage: pam_web3_tool encrypt-symmetric --signature "0x..." --plaintext '{"hostname":"..."}'
-        output: Hex-encoded ciphertext for userEncrypted field
-
-      decrypt-symmetric:
-        description: Decrypt data with signature-derived key
-        usage: pam_web3_tool decrypt-symmetric --signature "0x..." --ciphertext "..."
-        output: Decrypted plaintext
-
-      decrypt:
-        description: Decrypt ECIES-encrypted data (for transport decryption)
-        usage: pam_web3_tool decrypt --scheme secp256k1 --private-key-file server.key --ciphertext "..."
-        output: Decrypted plaintext
 
 smart_contract:
   path: contracts/src/AccessCredentialNFT.sol
@@ -353,6 +313,6 @@ changelog:
         change: |
           Split into two packages:
           - libpam-web3: PAM module for VMs (authentication)
-          - libpam-web3-tools: Server tools (pam_web3_tool, signing page)
+          - libpam-web3-tools: Server tools (signing page)
     new_features:
       - Simplified ownership-based authentication (wallet + NFT token ID + GECOS)

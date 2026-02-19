@@ -25,7 +25,6 @@
 
 pub mod callback;
 pub mod config;
-pub mod ecies;
 pub mod otp;
 pub mod passwd_lookup;
 pub mod signature;

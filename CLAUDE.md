@@ -6,8 +6,7 @@
 
 | Component | Profile | Extra focus areas |
 |---|---|---|
-| `pam_web3_tool` (tools CLI) | S7 P9 E6 C6 I7 A8 L6 | Security (P9 — crypto operations, key handling), Performance (A8 — runs per SSH login) |
-| everything else (PAM module) | S8 P10 E7 C5 I8 A8 L7 | Security (P10 — authentication boundary, every code path is a potential auth bypass), Performance (A8 — called on every SSH login) |
+| PAM module | S8 P10 E7 C5 I8 A8 L7 | Security (P10 — authentication boundary, every code path is a potential auth bypass), Performance (A8 — called on every SSH login) |
 
 See `SPECIAL.md` for full stat definitions and the priority allocation model.
 
@@ -41,10 +40,7 @@ src/
 ├── config.rs        # TOML config loading (/etc/pam_web3/config.toml)
 ├── otp.rs           # OTP generation (HMAC-SHA3, machine_id + timestamp)
 ├── signature.rs     # secp256k1 ecrecover (personal_sign format)
-├── passwd_lookup.rs # GECOS wallet address lookup (wallet=ADDRESS)
-├── ecies.rs         # Encryption schemes (secp256k1, x25519, AES-GCM)
-└── bin/
-    └── pam_web3_tool.rs  # CLI for keypair gen, encryption
+└── passwd_lookup.rs # GECOS wallet address lookup (wallet=ADDRESS)
 
 contracts/           # Solidity: AccessCredentialNFT (ERC-721)
 ```
@@ -52,11 +48,10 @@ contracts/           # Solidity: AccessCredentialNFT (ERC-721)
 ## Build Commands
 
 ```bash
-cargo build --release                 # PAM module + pam_web3_tool
+cargo build --release                 # PAM module (.so)
 
-# Debian packages
+# Debian package
 ./packaging/build-deb.sh              # libpam-web3 (PAM module for VMs)
-./packaging/build-deb-tools.sh        # libpam-web3-tools (server tools)
 ```
 
 ## Key Files
@@ -151,16 +146,12 @@ cargo test                            # All tests
 ## Important Paths
 
 - PAM module: `target/release/libpam_web3.so`
-- CLI tool: `target/release/pam_web3_tool`
 
-## Debian Packages
-
-Two separate packages for different deployment targets:
+## Debian Package
 
 | Package | Install On | Contents |
 |---------|------------|----------|
 | `libpam-web3` | VMs (client machines) | PAM module, self-signed TLS cert |
-| `libpam-web3-tools` | Management server | `pam_web3_tool`, contract artifacts |
 
 ---
 

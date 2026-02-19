@@ -437,9 +437,7 @@ libpam-web3/
 │   ├── otp.rs              # OTP generation and verification
 │   ├── signature.rs        # secp256k1 ecrecover
 │   ├── passwd_lookup.rs    # GECOS wallet address lookup
-│   ├── ecies.rs            # Encryption schemes (ECIES, AES-GCM, x25519)
-│   └── bin/
-│       └── pam_web3_tool.rs  # CLI tool (keypair gen, encryption)
+│   └── passwd_lookup.rs    # GECOS wallet address lookup
 ├── contracts/              # AccessCredentialNFT smart contract (ERC-721)
 ├── scripts/
 │   ├── extract-signing-page.sh   # NFT signing page extractor (Linux/macOS)

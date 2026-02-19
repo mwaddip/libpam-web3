@@ -6,8 +6,6 @@
 #   - PAM module (pam_web3.so) for wallet-based authentication
 #   - Configuration for PAM authentication on VMs
 #
-# For server-side tools (pam_web3_tool), see build-deb-tools.sh
-#
 # Usage: ./packaging/build-deb.sh
 #
 # Requirements: dpkg-deb (apt install dpkg)

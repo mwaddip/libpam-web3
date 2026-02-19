@@ -114,9 +114,6 @@ default (submodule)       S6  P6  E7  C8  I9  A7  L5
 ```
 default (submodule)       S8  P10 E7  C5  I8  A8  L7
   Authentication boundary. This is the lock on the door.
-
-pam_web3_tool             S7  P9  E6  C6  I7  A8  L6
-  Crypto CLI. Performance matters (runs per SSH login). Security is non-negotiable.
 ```
 
 ### blockhost-broker

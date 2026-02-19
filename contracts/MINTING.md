@@ -53,13 +53,11 @@ When a user purchases VM access, they provide a signature that will later let th
 The subscription manager needs a secp256k1 keypair for receiving encrypted signatures.
 
 ```bash
-# Generate keypair
-pam_web3_tool generate-keypair --output /etc/subscription-manager/server.key --show-pubkey
-
-# Output:
-# Private key written to: /etc/subscription-manager/server.key
-# Permissions set to 600 (owner read/write only)
-# Public key (hex): 04a1b2c3...  ← Share this with the signing page
+# Generate secp256k1 keypair with OpenSSL
+openssl ecparam -name secp256k1 -genkey -noout -outform DER | \
+    openssl ec -inform DER -text -noout 2>/dev/null | \
+    grep -A3 'priv:' | tail -n+2 | tr -d ' :\n' > /etc/subscription-manager/server.key
+chmod 600 /etc/subscription-manager/server.key
 ```
 
 The **public key** is embedded in the signing page so users can encrypt their signatures.
@@ -97,32 +95,6 @@ await fetch('/api/provision', {
 
 The subscription manager receives the encrypted signature and decrypts it.
 
-#### Using pam_web3_tool (CLI)
-
-```bash
-pam_web3_tool decrypt \
-    --scheme secp256k1 \
-    --private-key-file /etc/subscription-manager/server.key \
-    --ciphertext "<encrypted_signature_hex>"
-```
-
-#### Using Rust
-
-```rust
-use pam_web3::ecies;
-use std::fs;
-
-fn decrypt_user_signature(encrypted_signature: &str) -> Result<String, Box<dyn Error>> {
-    let private_key = fs::read_to_string("/etc/subscription-manager/server.key")?
-        .trim()
-        .to_string();
-    let private_key_bytes = hex::decode(&private_key)?;
-
-    let signature = ecies::decrypt(&private_key_bytes, encrypted_signature)?;
-    Ok(signature)
-}
-```
-
 #### Using JavaScript/Node
 
 ```javascript
@@ -150,37 +122,6 @@ Key derivation:  key = keccak256(signature_bytes)
 Cipher:          AES-256-GCM
 Output format:   IV (12 bytes) || ciphertext || authTag (16 bytes)
 Encoding:        Hex string (no 0x prefix)
-```
-
-#### Using pam_web3_tool (CLI)
-
-```bash
-pam_web3_tool encrypt-symmetric \
-    --signature "0x<decrypted_user_signature>" \
-    --plaintext '{"hostname":"192.168.1.100","port":22}'
-
-# Output:
-# Ciphertext (hex): a1b2c3d4e5f6...
-```
-
-#### Using Rust
-
-```rust
-use pam_web3::ecies::encrypt_symmetric_hex;
-
-fn encrypt_connection_details(
-    user_signature: &str,
-    hostname: &str,
-    port: u16,
-) -> Result<String, Box<dyn Error>> {
-    let connection_info = serde_json::json!({
-        "hostname": hostname,
-        "port": port
-    }).to_string();
-
-    let encrypted = encrypt_symmetric_hex(user_signature, &connection_info)?;
-    Ok(encrypted)
-}
 ```
 
 #### Using JavaScript/Node
@@ -380,7 +321,5 @@ cast call $BLOCKHOST_NFT "tokenURI(uint256)" <TOKEN_ID> --rpc-url $RPC_URL | cas
 
 | File | Purpose |
 |------|---------|
-| `pam_web3_tool` | CLI for encryption/decryption operations |
-| `src/ecies.rs` | Rust implementation of encryption schemes |
-| `signing-page/` | Browser UI for wallet signing |
+| `signing-page/` | Browser UI for wallet signing (shipped by engine) |
 | `contracts/src/AccessCredentialNFT.sol` | NFT contract |
