@@ -1,0 +1,30 @@
+# libpam-web3 Configuration
+#
+# Wallet address authentication via GECOS field lookup.
+# Users sign an OTP with their wallet, and the server matches the
+# recovered wallet address against /etc/passwd GECOS entries.
+#
+# GECOS format: wallet=0x1234...abcd[,nft=5]
+# Matching is case-insensitive on the address.
+#
+# Copy to /etc/pam_web3/config.toml
+
+[machine]
+# Unique identifier for this machine (shown when signing)
+id = "my-server"
+
+# Secret key for OTP HMAC (minimum 16 bytes / 32 hex chars)
+# Generate with: openssl rand -hex 32
+secret_key = "0x<your-64-char-hex-key>"
+
+[auth]
+# URL to the signing page
+signing_url = "https://your-signing-page.example.com"
+
+# OTP settings
+otp_length = 6           # 4-19 digits (default: 6)
+otp_ttl_seconds = 300    # seconds before OTP expires (default: 300)
+
+# Callback mode (browser auto-posts signature) is detected at runtime:
+# if /run/libpam-web3/pending/ exists, callback sessions are created
+# automatically. No config flag needed.

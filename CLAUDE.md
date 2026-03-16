@@ -6,9 +6,7 @@
 
 | Component | Profile | Extra focus areas |
 |---|---|---|
-| `pam_web3_tool` (tools CLI) | S7 P9 E6 C6 I7 A8 L6 | Security (P9 — crypto operations, key handling), Performance (A8 — runs per SSH login) |
-| `web3-auth-svc` | S7 P9 E8 C5 I7 A7 L7 | Security (P9 — auth service), Reliability (E8 — long-running, must not crash or leak) |
-| everything else (PAM module) | S8 P10 E7 C5 I8 A8 L7 | Security (P10 — authentication boundary, every code path is a potential auth bypass), Performance (A8 — called on every SSH login) |
+| PAM module | S8 P10 E7 C5 I8 A8 L7 | Security (P10 — authentication boundary, every code path is a potential auth bypass), Performance (A8 — called on every SSH login) |
 
 See `SPECIAL.md` for full stat definitions and the priority allocation model.
 
@@ -27,41 +25,33 @@ source ~/projects/sharedenv/blockhost.env
 
 ## Project Overview
 
-PAM module for Linux authentication via Ethereum wallet signatures. Two modes:
+PAM module for Linux authentication via wallet signatures. Verifies identity through signature verification, then maps wallet addresses to Linux usernames via GECOS fields.
 
-- **Wallet mode**: File-based wallet→username mapping (`/etc/pam_web3/wallets`)
-- **NFT mode**: Blockchain NFT ownership + LDAP username/revocation lookup
+Supports two signature types:
+- **EVM**: secp256k1 ecrecover (raw hex signature)
+- **OPNet**: JSON callback with OTP validation and wallet address
 
 ## Architecture
 
 ```
 src/
-├── lib.rs           # PAM entry point, mode dispatch
+├── lib.rs           # PAM entry point, signature detection, auth orchestration
 ├── callback.rs      # Callback-based signing session management (file IPC)
 ├── config.rs        # TOML config loading (/etc/pam_web3/config.toml)
 ├── otp.rs           # OTP generation (HMAC-SHA3, machine_id + timestamp)
 ├── signature.rs     # secp256k1 ecrecover (personal_sign format)
-├── wallet_auth.rs   # Wallet mode: file lookup
-├── blockchain.rs    # NFT mode: Unix socket client to web3-auth-svc
-├── ldap.rs          # NFT mode: LDAP revocation/username lookup
-├── ecies.rs         # NFT mode: 3 encryption schemes (secp256k1, x25519, AES-GCM)
-└── bin/
-    └── pam_web3_tool.rs  # CLI for keypair gen, encryption
+└── passwd_lookup.rs # GECOS wallet address lookup (wallet=ADDRESS)
 
-web3-auth-svc/       # Daemon for blockchain queries + HTTPS callback server
 contracts/           # Solidity: AccessCredentialNFT (ERC-721)
-signing-page/        # Browser wallet signing UI
 ```
 
 ## Build Commands
 
 ```bash
-cargo build --release                 # Wallet mode only
-cargo build --release --features nft  # Full NFT support
+cargo build --release                 # PAM module (.so)
 
-# Debian packages
+# Debian package
 ./packaging/build-deb.sh              # libpam-web3 (PAM module for VMs)
-./packaging/build-deb-tools.sh        # libpam-web3-tools (server tools)
 ```
 
 ## Key Files
@@ -69,86 +59,99 @@ cargo build --release --features nft  # Full NFT support
 | File | Purpose |
 |------|---------|
 | `/etc/pam_web3/config.toml` | Runtime configuration |
-| `/etc/pam_web3/wallets` | Wallet→username mappings (wallet mode) |
 | `/lib/security/pam_web3.so` | Installed PAM module |
-
-Note: `server.key` is NOT required for NFT mode (v0.4.0+). Authentication uses ownership + GECOS matching.
 
 ## Config Format
 
 ```toml
 [machine]
 id = "server-name"
-secret_key = "0x..."      # Wallet mode: HMAC key
+secret_key = "0x..."      # HMAC key for OTP generation
 
 [auth]
-mode = "wallet"           # or "nft"
 signing_url = "https://..."
 otp_length = 6
 otp_ttl_seconds = 300
-callback_enabled = true   # Browser auto-POSTs signature (v0.6.0+)
-callback_grace_seconds = 10
-
-[wallet]                  # Wallet mode only
-wallets_path = "/etc/pam_web3/wallets"
-
-[blockchain]              # NFT mode only
-socket_path = "/run/web3-auth/web3-auth.sock"
-chain_id = 1
-nft_contract = "0x..."
-
-[ldap]                    # NFT mode only
-server = "ldap://..."
-base_dn = "..."
-bind_dn = "..."
-bind_password_file = "..."
 ```
 
 ## Authentication Flow
 
 1. PAM loads config, generates OTP (HMAC: machine_id + timestamp + secret)
-2. If callback enabled: create session file in `/run/libpam-web3/pending/`, append `?session=` to URL
+2. If `/run/libpam-web3/pending/` exists: create session file, append `?session=` to URL
 3. User sees OTP + signing URL
 4. User signs message: `Authenticate to {machine_id} with code: {otp}`
 5. Signature delivery (two paths):
-   - **Callback mode** (v0.6.0+): Browser auto-fills OTP/machine from session, POSTs signature to web3-auth-svc HTTPS → user presses Enter
-   - **Manual mode**: User copy-pastes signature into terminal
-6. PAM recovers wallet address via ecrecover
-7. Mode-specific lookup:
-   - Wallet: Check wallets file
-   - NFT: Query blockchain for wallet's NFT token IDs → Match against GECOS (`nft=TOKEN_ID`)
+   - **Callback mode**: Browser auto-fills OTP/machine from session, POSTs signature to auth service → user presses Enter
+   - **Manual mode**: User copy-pastes signature into terminal (fallback when no auth service running)
+6. Signature detection (source-dependent):
+   - **Manual paste** → always EVM: secp256k1 ecrecover → wallet address
+   - **Callback .sig file** → try JSON first, fall back to EVM:
+     - **JSON** `{otp, machine_id, wallet_address}` → OPNet path: validate OTP → use wallet address
+     - **Raw hex** → EVM path: ecrecover → wallet address
+7. GECOS lookup: scan `/etc/passwd` for `wallet=ADDRESS` match (case-insensitive)
 8. Return username to PAM
 
-**NFT Mode (v0.4.0+)**: No server private key needed. Authentication is purely ownership-based:
-- Wallet owns NFT → Token ID matches GECOS entry → Access granted
+## IPC Contracts
 
-## Feature Flags
+### Session file (PAM → auth service)
 
-- Default: wallet mode only (~10 deps)
-- `nft`: Adds tokio, ldap3, ecies, aes-gcm, crypto_box, base64, clap
-- `serde_json` is always-on (needed for callback session files)
+Written by PAM to `/run/libpam-web3/pending/{session_id}.json`:
+
+```json
+{"otp":"123456","machine_id":"server-name","session_id":"a1b2c3...hex32"}
+```
+
+- `session_id`: 128-bit random hex (32 chars)
+- Auth service reads this to show OTP/machine to the browser
+
+### .sig file (auth service → PAM)
+
+Written by auth service to `/run/libpam-web3/pending/{session_id}.sig`:
+
+**EVM** (raw hex):
+```
+0x + 130 hex chars (65-byte secp256k1 signature)
+```
+
+**OPNet** (JSON — callback only, never accepted from manual paste):
+```json
+{"otp":"123456","machine_id":"server-name","wallet_address":"0xAbCd...1234"}
+```
+
+- `wallet_address` is chain-agnostic (EVM `0x...`, Bitcoin `bc1q...`, etc.)
+- Must match the GECOS `wallet=ADDRESS` field (case-insensitive)
+- Must not be empty
+- All three fields required; extra fields ignored
+
+**Trust model**: OPNet JSON trusts the `wallet_address` without cryptographic proof — the auth service must have verified the wallet signature before writing the .sig file. This is why JSON is rejected from manual paste (the OTP is displayed on screen, so terminal input carries no proof of wallet ownership).
+
+Non-JSON content falls through to EVM ecrecover (fail-secure: invalid hex → deny).
+
+## GECOS Format
+
+```
+wallet=0x1234...abcd,nft=5
+```
+
+- `wallet=ADDRESS` — required for authentication (case-insensitive string match, chain-agnostic)
+- `nft=TOKEN_ID` — optional metadata (token ID for reference)
+- Can include other comma-separated fields: `John Doe,wallet=0x...,nft=5`
 
 ## Testing
 
 ```bash
 cargo test                            # All tests
-cargo test --features nft             # Include NFT module tests
 ```
 
 ## Important Paths
 
 - PAM module: `target/release/libpam_web3.so`
-- CLI tool: `target/release/pam_web3_tool` (requires --features nft)
-- Web3 service: `web3-auth-svc/target/release/web3-auth-svc`
 
-## Debian Packages
-
-Two separate packages for different deployment targets:
+## Debian Package
 
 | Package | Install On | Contents |
 |---------|------------|----------|
-| `libpam-web3` | VMs (client machines) | PAM module, `web3-auth-svc` daemon, signing page, self-signed TLS cert |
-| `libpam-web3-tools` | Management server | `pam_web3_tool`, signing page, contract artifacts |
+| `libpam-web3` | VMs (client machines) | PAM module, self-signed TLS cert |
 
 ---
 
@@ -176,6 +179,15 @@ git diff --cached --name-only | xargs grep -l -E '(0x[a-fA-F0-9]{64}|password|se
 - `config.toml` with real credentials
 - `ldap.secret`, `server.key`
 
+### Auth Boundary Review (P10)
+
+**When touching any auth code path, ask these questions:**
+
+1. **Proof vs assertion**: For every value the auth flow trusts, does the user *cryptographically prove* it, or merely *assert* it? If asserted, what stops an attacker who can see the same screen from forging it?
+2. **Trust boundary per input source**: The same data format from different channels (terminal paste vs callback file vs network) may carry different trust levels. Gate trust decisions on the source, not only the content.
+3. **Displayed secrets are public**: Any value shown to the user (OTP, machine_id, signing URL) must be treated as attacker-known. Auth decisions must not depend solely on knowledge of displayed values.
+4. **Fail-secure on every branch**: Trace every early return and error path — does it deny access? A missed error check is an auth bypass.
+
 ---
 
 ## Subproject Documentation
@@ -185,8 +197,6 @@ Each major component has its own documentation:
 | Directory | Documentation | Purpose |
 |-----------|---------------|---------|
 | `contracts/` | `CLAUDE.md`, `PROJECT.yaml` | Smart contract specs, encryption flows |
-| `web3-auth-svc/` | (see directory) | Blockchain query daemon |
-| `signing-page/` | (see directory) | Browser signing UI |
 
 ### PROJECT.yaml Maintenance (CRITICAL)
 
@@ -208,29 +218,3 @@ These files are machine-readable specifications that:
 - Encryption flows (ECIES for server, AES-GCM for user)
 - Complete NFT minting and authentication flows
 - Contract interface and function signatures
-
----
-
-## Authentication Model (NFT Mode v0.4.0+)
-
-**Simple ownership-based authentication. No server-side decryption needed.**
-
-```
-Authentication Flow:
-  1. User signs OTP challenge → proves wallet ownership
-  2. PAM queries blockchain → gets wallet's NFT token IDs
-  3. PAM checks /etc/passwd GECOS → finds entry with nft=TOKEN_ID
-  4. Match found → user authenticated as that Linux user
-```
-
-**Server requirements (minimal):**
-- Contract address (public)
-- RPC endpoint (public)
-- GECOS entries mapping token IDs to Linux users
-
-**No server private keys needed.** The `serverEncrypted` field was removed in v0.4.0.
-
-**Optional `userEncrypted` field:**
-- Stores connection details encrypted with signature-derived key (AES-GCM)
-- Only the NFT holder can decrypt by re-signing the `publicSecret`
-- Purely for user convenience - authentication works without it

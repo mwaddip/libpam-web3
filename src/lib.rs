@@ -1,55 +1,54 @@
 //! PAM Web3 Authentication Module
 //!
-//! Authenticate Linux users via Ethereum wallet signatures.
+//! Authenticate Linux users via wallet signatures.
 //!
-//! # Authentication Modes
+//! # Authentication Flow
 //!
-//! ## Wallet Mode (default)
-//! Simple file-based wallet → username mapping.
-//! - User signs OTP with their wallet
-//! - Server recovers wallet address from signature
-//! - Wallet is looked up in a simple text file
+//! 1. PAM generates OTP challenge bound to machine ID
+//! 2. User signs OTP with their wallet (EVM or OPNet)
+//! 3. Signature is delivered via callback or manual paste
+//! 4. PAM recovers/extracts wallet address
+//! 5. Wallet address matched against GECOS field (wallet=ADDRESS)
+//! 6. User authenticated as matching Linux user
 //!
-//! ## NFT Mode (requires `nft` feature)
-//! NFT-based authentication with LDAP integration.
-//! - User signs OTP with their wallet
-//! - Server verifies NFT ownership via blockchain
-//! - Username and revocation status checked via LDAP
+//! # Signature Content Detection
+//!
+//! - Raw hex → EVM path (secp256k1 ecrecover)
+//! - JSON with otp/machine_id/wallet_address → OPNet path (OTP validation + trusted address)
 //!
 //! # Security
 //!
 //! - OTP is bound to machine ID and timestamp (prevents replay attacks)
-//! - Signature verification uses secp256k1 ecrecover
+//! - Signature verification uses secp256k1 ecrecover (EVM)
+//! - OPNet path validates OTP before trusting wallet address
 //! - Fail-secure: any error results in authentication denial
 
 pub mod callback;
 pub mod config;
 pub mod otp;
-pub mod signature;
-pub mod wallet_auth;
-
-// NFT mode modules (feature-gated)
-#[cfg(feature = "nft")]
-pub mod blockchain;
-#[cfg(feature = "nft")]
-pub mod ecies;
-#[cfg(feature = "nft")]
-pub mod ldap;
-#[cfg(feature = "nft")]
 pub mod passwd_lookup;
+pub mod signature;
 
-use config::{AuthMode, Config};
-#[cfg(feature = "nft")]
-use config::NftLookupMethod;
+use config::Config;
 use otp::Otp;
 use pam::ffi::{pam_conv, pam_get_item, pam_set_item, PAM_CONV, PAM_USER};
 use pam::{export_pam_module, PamHandle, PamModule, PamReturnCode};
+use serde::Deserialize;
 use std::ffi::{c_int, c_void, CStr, CString};
 use std::os::raw::c_uint;
 use std::ptr;
 
 const PAM_PROMPT_ECHO_OFF: c_int = 1;
 const PAM_TEXT_INFO: c_int = 4;
+const CALLBACK_GRACE_SECONDS: u64 = 10;
+
+/// OPNet callback payload: wallet address + OTP delivered via trusted channel
+#[derive(Debug, Deserialize)]
+struct OPNetCallback {
+    otp: String,
+    machine_id: String,
+    wallet_address: String,
+}
 
 /// PAM module entry point
 pub struct PamWeb3;
@@ -181,29 +180,25 @@ fn authenticate_impl(handle: &PamHandle) -> Result<String, AuthError> {
         syslog(&format!("Failed to load config: {:?}", e));
         AuthError::ConfigError
     })?;
-    syslog(&format!("Config loaded, mode: {:?}", config.auth.mode));
+    syslog("Config loaded");
 
-    // Get the secret key for OTP generation (same for both modes now)
+    // Get the secret key for OTP generation
     let secret_key = config.secret_key_bytes().map_err(|_| AuthError::ConfigError)?;
 
     // Generate OTP
     let otp_instance = Otp::generate(config.auth.otp_length, &config.machine.id, &secret_key)
         .map_err(|_| AuthError::OtpError)?;
 
-    // Try to create a callback session if enabled
-    let session = if config.auth.callback_enabled {
-        match callback::Session::create(&otp_instance.code, &config.machine.id) {
-            Ok(s) => {
-                syslog(&format!("Callback session created: {}", s.session_id));
-                Some(s)
-            }
-            Err(e) => {
-                syslog(&format!("Callback session failed (manual-only): {}", e));
-                None
-            }
+    // Try to create a callback session (detected at runtime by directory existence)
+    let session = match callback::Session::create(&otp_instance.code, &config.machine.id) {
+        Ok(s) => {
+            syslog(&format!("Callback session created: {}", s.session_id));
+            Some(s)
         }
-    } else {
-        None
+        Err(e) => {
+            syslog(&format!("Callback not available (manual-only): {}", e));
+            None
+        }
     };
 
     // Build signing URL, append ?session= if callback session exists
@@ -230,15 +225,19 @@ fn authenticate_impl(handle: &PamHandle) -> Result<String, AuthError> {
     let sig_input = pam_prompt(handle, PAM_PROMPT_ECHO_OFF, prompt_text)?
         .unwrap_or_default();
 
-    // Resolve signature: manual input or callback polling
-    let sig = if !sig_input.is_empty() {
-        sig_input
+    // Resolve signature and track source.
+    // OPNet JSON is only trusted from callbacks (auth service validates the
+    // wallet signature before writing the .sig file).  Manual paste must
+    // always go through EVM ecrecover — otherwise an attacker could paste
+    // JSON with a victim's wallet address and the on-screen OTP.
+    let (sig, from_callback) = if !sig_input.is_empty() {
+        (sig_input, false)
     } else if let Some(ref s) = session {
         syslog("Empty input, polling for callback signature...");
-        match s.wait_for_callback(config.auth.callback_grace_seconds) {
+        match s.wait_for_callback(CALLBACK_GRACE_SECONDS) {
             Some(sig) => {
                 syslog("Got callback signature");
-                sig
+                (sig, true)
             }
             None => {
                 syslog("No callback signature received");
@@ -250,163 +249,80 @@ fn authenticate_impl(handle: &PamHandle) -> Result<String, AuthError> {
         return Err(AuthError::NoSignature);
     };
     syslog(&format!(
-        "Got signature: {}...{}",
+        "Got signature ({}): {}...{}",
+        if from_callback { "callback" } else { "manual" },
         &sig[..10.min(sig.len())],
         &sig[sig.len().saturating_sub(10)..]
     ));
 
-    // Recover wallet address from signature
-    let message = otp_instance.signing_message();
-    syslog(&format!("Message: {}", message));
-
-    let wallet_address = signature::recover_address(&message, &sig).map_err(|e| {
-        syslog(&format!("Signature recovery failed: {:?}", e));
-        AuthError::InvalidSignature
-    })?;
-    syslog(&format!("Recovered address: {}", wallet_address));
-
-    // Verify OTP hasn't expired
-    otp_instance
-        .verify(
-            &otp_instance.code,
-            &config.machine.id,
-            &secret_key,
-            config.auth.otp_ttl_seconds,
-        )
-        .map_err(|e| {
-            syslog(&format!("OTP verification failed: {:?}", e));
-            AuthError::OtpExpired
-        })?;
-    syslog("OTP verified");
-
-    // Mode-specific username lookup
-    let username = match config.auth.mode {
-        AuthMode::Wallet => {
-            syslog("Using wallet mode");
-            wallet_auth::lookup_username(&config, &wallet_address).map_err(|e| {
-                syslog(&format!("Wallet lookup failed: {:?}", e));
-                AuthError::WalletNotAuthorized
-            })?
-        }
-        AuthMode::Nft => {
-            #[cfg(feature = "nft")]
-            {
-                syslog("Using NFT mode");
-                nft_authenticate(&config, &wallet_address)?
-            }
-            #[cfg(not(feature = "nft"))]
-            {
-                syslog("NFT mode not compiled in");
-                return Err(AuthError::NftModeNotCompiled);
-            }
-        }
+    // OPNet JSON is only accepted from callback; manual paste → always EVM
+    let opnet = if from_callback {
+        serde_json::from_str::<OPNetCallback>(&sig).ok()
+    } else {
+        None
     };
 
-    syslog(&format!("Auth success for user: {}", username));
-    Ok(username)
-}
+    let wallet_address_str = if let Some(opnet) = opnet {
+        // OPNet path: validate OTP, then trust the wallet address from JSON
+        syslog("OPNet callback detected");
 
-/// NFT-based authentication (feature-gated)
-///
-/// Authentication model (v0.4.0+):
-/// 1. Get all NFT token IDs owned by the wallet
-/// 2. Match token IDs against GECOS entries in /etc/passwd (or LDAP)
-/// 3. No server-side decryption needed
-#[cfg(feature = "nft")]
-fn nft_authenticate(
-    config: &Config,
-    wallet_address: &alloy_primitives::Address,
-) -> Result<String, AuthError> {
-    let blockchain_config = config
-        .blockchain
-        .as_ref()
-        .ok_or(AuthError::ConfigError)?;
+        otp_instance
+            .verify(
+                &opnet.otp,
+                &opnet.machine_id,
+                &secret_key,
+                config.auth.otp_ttl_seconds,
+            )
+            .map_err(|e| {
+                syslog(&format!("OPNet OTP verification failed: {:?}", e));
+                AuthError::OtpExpired
+            })?;
+        syslog("OPNet OTP verified");
 
-    // Create blockchain client
-    let blockchain_client = blockchain::BlockchainClient::new(blockchain_config.clone())
-        .map_err(|_| AuthError::BlockchainError)?;
-
-    // Run async code in a blocking context
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| AuthError::RuntimeError)?;
-
-    // Get all token IDs owned by this wallet
-    let token_ids = rt
-        .block_on(blockchain_client.get_wallet_nfts(wallet_address))
-        .map_err(|e| {
-            syslog(&format!("NFT query failed: {:?}", e));
-            AuthError::NftNotFound
-        })?;
-
-    syslog(&format!("Found {} NFTs for wallet: {:?}", token_ids.len(), token_ids));
-
-    // Try to find a matching token ID in GECOS entries
-    for token_id in &token_ids {
-        let username = match config.auth.nft_lookup {
-            NftLookupMethod::Ldap => {
-                syslog(&format!("Checking LDAP for token {}", token_id));
-                match nft_ldap_lookup(config, token_id, wallet_address) {
-                    Ok(u) => Some(u),
-                    Err(_) => None,
-                }
-            }
-            NftLookupMethod::Passwd => {
-                syslog(&format!("Checking passwd for token {}", token_id));
-                match nft_passwd_lookup(token_id) {
-                    Ok(u) => Some(u),
-                    Err(_) => None,
-                }
-            }
-        };
-
-        if let Some(username) = username {
-            syslog(&format!("Matched token {} to user {}", token_id, username));
-            return Ok(username);
+        if opnet.wallet_address.is_empty() {
+            syslog("OPNet callback has empty wallet_address");
+            return Err(AuthError::InvalidSignature);
         }
-    }
 
-    syslog("No matching GECOS entry found for any owned NFT");
-    Err(AuthError::NftNotFound)
-}
+        opnet.wallet_address
+    } else {
+        // EVM path: ecrecover to get wallet address from signature
+        syslog("EVM signature detected");
 
-/// Look up username via LDAP (checks revocation status)
-#[cfg(feature = "nft")]
-fn nft_ldap_lookup(
-    config: &Config,
-    token_id: &str,
-    wallet_address: &alloy_primitives::Address,
-) -> Result<String, AuthError> {
-    let ldap_password = config
-        .load_ldap_password()
-        .map_err(|_| AuthError::LdapError)?;
+        let message = otp_instance.signing_message();
+        syslog(&format!("Message: {}", message));
 
-    let ldap_config = config.ldap.as_ref().ok_or(AuthError::ConfigError)?;
-    let ldap_client = ldap::LdapClient::new(ldap_config.clone(), ldap_password);
-
-    let validation_result = ldap_client
-        .validate_nft(token_id, &wallet_address.to_string())
-        .map_err(|e| {
-            syslog(&format!("LDAP validation failed: {:?}", e));
-            match e {
-                ldap::LdapError::NftRevoked => AuthError::NftRevoked,
-                _ => AuthError::LdapError,
-            }
+        let wallet_address = signature::recover_address(&message, &sig).map_err(|e| {
+            syslog(&format!("Signature recovery failed: {:?}", e));
+            AuthError::InvalidSignature
         })?;
+        syslog(&format!("Recovered address: {}", wallet_address));
 
-    Ok(validation_result.username)
-}
+        // Verify OTP hasn't expired
+        otp_instance
+            .verify(
+                &otp_instance.code,
+                &config.machine.id,
+                &secret_key,
+                config.auth.otp_ttl_seconds,
+            )
+            .map_err(|e| {
+                syslog(&format!("OTP verification failed: {:?}", e));
+                AuthError::OtpExpired
+            })?;
+        syslog("OTP verified");
 
-/// Look up username via /etc/passwd GECOS field
-#[cfg(feature = "nft")]
-fn nft_passwd_lookup(token_id: &str) -> Result<String, AuthError> {
-    let result = passwd_lookup::lookup_by_token_id(token_id).map_err(|e| {
-        syslog(&format!("Passwd lookup failed: {:?}", e));
-        AuthError::NftNotFound
+        format!("{}", wallet_address)
+    };
+
+    // Unified GECOS lookup: wallet=ADDRESS
+    let username = passwd_lookup::lookup_by_wallet_address(&wallet_address_str).map_err(|e| {
+        syslog(&format!("Wallet lookup failed: {:?}", e));
+        AuthError::WalletNotFound
     })?;
 
-    Ok(result.username)
+    syslog(&format!("Auth success for user: {}", username.username));
+    Ok(username.username)
 }
 
 /// Authentication error types
@@ -418,18 +334,5 @@ enum AuthError {
     OtpExpired,
     NoSignature,
     InvalidSignature,
-    WalletNotAuthorized,
-    #[cfg(feature = "nft")]
-    BlockchainError,
-    #[cfg(feature = "nft")]
-    NftNotFound,
-    #[cfg(feature = "nft")]
-    NftRevoked,
-    #[cfg(feature = "nft")]
-    LdapError,
-    #[cfg(feature = "nft")]
-    RuntimeError,
-    #[allow(dead_code)]
-    NftModeNotCompiled,
+    WalletNotFound,
 }
-
