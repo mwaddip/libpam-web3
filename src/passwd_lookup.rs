@@ -35,6 +35,44 @@ pub struct PasswdLookupResult {
     pub username: String,
 }
 
+/// Look up the wallet address for a specific username from /etc/passwd.
+///
+/// Reads the user's GECOS field and extracts the wallet=ADDRESS value.
+pub fn lookup_wallet_for_user(username: &str) -> Result<String, PasswdLookupError> {
+    lookup_wallet_for_user_from_file(username, PASSWD_PATH)
+}
+
+/// Look up the wallet address for a specific username from a specific passwd file.
+pub fn lookup_wallet_for_user_from_file(
+    username: &str,
+    passwd_path: &str,
+) -> Result<String, PasswdLookupError> {
+    let file = File::open(passwd_path)?;
+    let reader = BufReader::new(file);
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() < 5 {
+            continue;
+        }
+
+        if fields[0] == username {
+            let gecos = fields[4];
+            if let Some(address) = extract_wallet_address(gecos) {
+                return Ok(address);
+            }
+            return Err(PasswdLookupError::WalletNotFound);
+        }
+    }
+
+    Err(PasswdLookupError::WalletNotFound)
+}
+
 /// Look up a username by wallet address in /etc/passwd
 ///
 /// Searches the GECOS field of each passwd entry for "wallet=ADDRESS".

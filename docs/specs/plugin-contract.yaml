@@ -1,0 +1,292 @@
+# Plugin Interface Contract — Design by Contract (Meyer)
+#
+# Formal specification for libpam-web3 verification plugins.
+# All plugins MUST satisfy these contracts. PAM (the caller) MUST
+# satisfy its own obligations. Violations are security defects.
+#
+# Terminology:
+#   plugin    — the chain-specific verification binary
+#   caller    — libpam-web3 PAM module (src/plugin.rs)
+#   sig       — the .sig file content (JSON object with chain-specific fields)
+#   GECOS     — the wallet= value from /etc/passwd for the SSH username
+
+contract:
+  name: libpam-web3-plugin-interface
+  version: "1.0"
+  style: design-by-contract  # Bertrand Meyer, "Object-Oriented Software Construction"
+
+# ─── Plugin Invariants ──────────────────────────────────────────────
+# These hold across ALL invocations, regardless of command.
+
+plugin_invariants:
+  location:
+    rule: "Binary lives at /usr/lib/libpam-web3/plugins/{chain}"
+    check: "path.is_file() && mode & 0o111 != 0"
+
+  stateless:
+    rule: "No persistent state between invocations"
+    rationale: "PAM may invoke the same plugin for different users concurrently"
+
+  pure_local:
+    rule: "No network calls, no filesystem writes"
+    rationale: >
+      Plugin runs inside the PAM authentication stack (as root).
+      Network calls add latency and failure modes to SSH login.
+      Filesystem writes from a root process are a privilege escalation surface.
+    exception: "Reading own config file (if any) is permitted"
+
+  deterministic:
+    rule: "Same stdin → same stdout + same exit code"
+    rationale: "Reproducibility for debugging and audit"
+
+  bounded:
+    rule: "Must complete within PLUGIN_TIMEOUT_SECS (10s)"
+    consequence: "Caller kills the process after timeout; auth denied"
+
+  crash_isolated:
+    rule: "Plugin crash (signal, panic, abort) does not affect PAM stability"
+    enforced_by: "Subprocess execution with piped I/O"
+
+  single_command:
+    rule: "Each invocation handles exactly one command (info or verify)"
+    rationale: "No session state, no multi-step protocols"
+
+# ─── Discovery Command ──────────────────────────────────────────────
+
+discovery:
+  command: info
+  description: >
+    PAM sends this at startup to learn what chain the plugin handles
+    and what wallet address format it recognizes.
+
+  preconditions:
+    stdin_format:
+      rule: "stdin is exactly the JSON string {\"command\":\"info\"}"
+      type: "structural"
+
+    binary_executable:
+      rule: "Binary exists and has executable permission"
+      enforced_by: "Caller checks is_file() && mode & 0o111 before spawn"
+
+  postconditions:
+    on_success:  # exit 0
+      stdout_valid_json:
+        rule: "stdout is a single valid JSON object"
+
+      chain_field:
+        rule: "JSON contains 'chain': non-empty string"
+        constraint: "ASCII lowercase alphanumeric + underscore: [a-z0-9_]+"
+        uniqueness: "No two installed plugins may return the same chain value"
+        examples: ["cardano", "opnet", "solana"]
+
+      address_pattern_field:
+        rule: "JSON contains 'address_pattern': non-empty string that is a valid regex"
+        engine: "Rust regex crate (PCRE-like, no lookaround)"
+        purpose: >
+          PAM compiles this regex and matches it against the user's GECOS wallet
+          address to determine which plugin handles which user.
+        examples:
+          - "^addr(_test)?1[a-z0-9]+$"       # Cardano (mainnet + testnet)
+          - "^(bc1|tb1|bcrt1)[a-z0-9]+$"      # OPNet (Bitcoin-style)
+
+      no_extra_output:
+        rule: "No output after the JSON object (trailing whitespace permitted)"
+
+    on_failure:  # exit non-zero
+      skip:
+        rule: "Caller logs the error and skips this plugin — not fatal to PAM startup"
+      stderr:
+        rule: "stderr MAY contain a diagnostic message (logged by caller)"
+
+  invariants:
+    idempotent:
+      rule: "Multiple info calls return the same response"
+      rationale: "Caller may cache the result"
+
+    fast:
+      rule: "Must complete within INFO_TIMEOUT_SECS (2s)"
+      rationale: "Discovery runs for every installed plugin at every SSH login"
+
+# ─── Verification Command ───────────────────────────────────────────
+
+verification:
+  command: verify
+  description: >
+    PAM sends this when a .sig file's chain field matches this plugin.
+    The plugin verifies the signature and returns the wallet address
+    it can independently prove or derive from the cryptographic material.
+
+  preconditions:
+    stdin_format:
+      rule: "stdin is a single valid JSON object with exactly three fields"
+      fields:
+        sig:
+          type: "JSON object"
+          rule: "Full .sig file content, includes 'chain' and all chain-specific fields"
+          guarantee: "sig.chain matches this plugin's chain (caller pre-filters)"
+
+        otp_message:
+          type: "non-empty string"
+          format: "Authenticate to {machine_id} with code: {otp}"
+          rule: "The message the user was expected to sign"
+          source: "Generated by PAM from config + OTP"
+
+        wallet_address:
+          type: "non-empty string"
+          rule: "The wallet= value from the SSH user's GECOS field"
+          source: "PAM reads GECOS for the username provided by SSH"
+          matches: "This plugin's address_pattern regex (caller pre-validated)"
+          trust_level: >
+            EXPECTED value, not a user CLAIM. Comes from /etc/passwd,
+            which is root-writable only. The user cannot control this
+            value at authentication time.
+
+    chain_match:
+      rule: "sig.chain == this plugin's chain from info response"
+      enforced_by: "Caller dispatches by chain name"
+
+    address_match:
+      rule: "wallet_address matches this plugin's address_pattern"
+      enforced_by: "Caller runs regex match during plugin selection"
+
+  postconditions:
+    on_success:  # exit 0
+      stdout_wallet:
+        rule: "stdout contains exactly one non-empty string: the verified wallet address"
+        trimming: "Caller trims whitespace from stdout"
+
+      independently_derived:
+        rule: >
+          The wallet address MUST be independently derived from or verified
+          against cryptographic material in sig. The plugin MUST NOT simply
+          echo back the wallet_address input.
+        rationale: >
+          If the plugin echoes wallet_address, any .sig file with the right
+          chain field would authenticate as any user. The plugin must prove
+          that the sig content binds to the returned address.
+        examples:
+          cardano: "Derive address from COSE_Key pubkey via blake2b-224 + bech32, compare against wallet_address, return wallet_address only if match"
+          opnet: "Validate OTP fields in sig match otp_message, return sig.wallet_address (auth-svc already verified ML-DSA)"
+
+      wallet_address_format:
+        rule: "Returned address is in the canonical format for this chain"
+        examples:
+          cardano: "bech32: addr1... or addr_test1..."
+          opnet: "bech32: bc1... or tb1... or bcrt1..."
+          evm: "0x-prefixed checksummed hex (built-in, not a plugin)"
+
+    on_failure:  # exit non-zero
+      auth_denied:
+        rule: "Caller treats this as authentication failure"
+      stdout_ignored:
+        rule: "Caller does not read stdout on non-zero exit"
+      stderr:
+        rule: "stderr MAY contain a reason string (caller logs to syslog)"
+
+    on_timeout:
+      rule: "Caller kills the process after PLUGIN_TIMEOUT_SECS (10s)"
+      consequence: "Auth denied"
+
+    on_crash:
+      rule: "Caller treats signal/crash as auth denied"
+      consequence: "stderr captured if available, logged"
+
+  invariants:
+    fail_secure:
+      rule: >
+        If the plugin cannot positively verify the signature, it MUST
+        exit non-zero. Absence of evidence is not evidence of absence.
+        Every code path that does not reach a positive verification
+        MUST terminate with non-zero exit.
+      corollary: "An empty stdout with exit 0 is treated as denial by caller (defense-in-depth)"
+
+    no_identity_trust:
+      rule: >
+        wallet_address is a reference value, not an identity proof.
+        The plugin MAY use it for comparison (e.g., Cardano compares
+        derived address against it). The plugin MUST NOT return it
+        without independent verification from sig.
+
+    no_otp_trust:
+      rule: >
+        otp_message is provided for plugins that need to verify the
+        signed message content. The plugin MUST NOT treat otp_message
+        alone as proof of anything — it's a value PAM generated, and
+        the user saw it on screen.
+
+# ─── Caller Obligations ─────────────────────────────────────────────
+# What PAM (src/plugin.rs, src/lib.rs) guarantees to the plugin.
+
+caller_obligations:
+  pre_validation:
+    rule: "Caller verifies binary exists and is executable before spawn"
+
+  chain_routing:
+    rule: "Caller only sends verify to the plugin whose chain matches sig.chain"
+
+  address_routing:
+    rule: "Caller only sends verify to the plugin whose address_pattern matches wallet_address"
+
+  timeout_enforcement:
+    rule: "Caller enforces PLUGIN_TIMEOUT_SECS; kills process on expiry"
+
+  post_comparison:
+    rule: >
+      After plugin returns (exit 0), caller compares returned wallet address
+      against GECOS wallet_address (case-insensitive). Auth succeeds only
+      if they match. This is the final gate — even a compromised plugin
+      cannot authenticate a user whose GECOS doesn't match.
+
+  no_trust_escalation:
+    rule: >
+      Caller treats plugin output as a claim, not a fact. The claim is
+      validated against GECOS before granting access.
+
+  crash_handling:
+    rule: "Plugin crash/signal does not crash PAM. Auth denied on any abnormal termination."
+
+  logging:
+    rule: "Caller logs plugin stderr to syslog (LOG_AUTH facility)"
+
+  stdin_closure:
+    rule: "Caller closes stdin after writing input (plugin sees EOF)"
+
+# ─── Security Properties ────────────────────────────────────────────
+# Cross-cutting security invariants that span plugin + caller.
+
+security:
+  defense_in_depth:
+    rule: >
+      Authentication requires ALL of: (1) valid .sig file with correct chain,
+      (2) plugin exit 0 with non-empty wallet, (3) returned wallet matches
+      GECOS. Compromising any single component is insufficient.
+
+  displayed_secrets_are_public:
+    rule: >
+      OTP and machine_id are shown to the user on screen. Any security
+      property that depends solely on knowledge of these values is broken.
+      Plugins that validate OTP do so as defense-in-depth, not as primary proof.
+
+  sig_is_untrusted_input:
+    rule: >
+      The .sig file is written by the auth-svc (internet-facing). A compromised
+      auth-svc can write arbitrary .sig content. The plugin MUST validate
+      cryptographic integrity, not just structural correctness.
+    exception: >
+      Chains where the auth-svc performs heavy cryptographic verification
+      (e.g., OPNet ML-DSA ~2KB) and the .sig is a trusted assertion.
+      In this case, the trust boundary doc for that chain MUST explicitly
+      state what the auth-svc verifies and what the plugin trusts.
+
+  gecos_is_trusted:
+    rule: >
+      /etc/passwd (GECOS) is writable only by root. The wallet_address
+      extracted from GECOS is a trusted reference value. If an attacker
+      can modify /etc/passwd, they already have root — PAM is not the
+      threat model at that point.
+
+  no_privilege_amplification:
+    rule: >
+      The plugin runs as the same user as PAM (typically root). It MUST NOT
+      spawn subprocesses, open network connections, or write files. Violation
+      would amplify the attack surface of a compromised plugin binary.

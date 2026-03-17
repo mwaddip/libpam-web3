@@ -1,0 +1,9 @@
+[submodule "contracts/lib/openzeppelin-contracts"]
+	path = contracts/lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
+[submodule "plugins/cardano"]
+	path = plugins/cardano
+	url = git@github.com:mwaddip/libpam-web3-cardano.git
+[submodule "plugins/opnet"]
+	path = plugins/opnet
+	url = git@github.com:mwaddip/libpam-web3-opnet.git

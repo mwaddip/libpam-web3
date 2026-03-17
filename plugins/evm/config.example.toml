@@ -1,0 +1,16 @@
+# web3-auth-svc (EVM) configuration
+# Install to: /etc/web3-auth/evm.toml
+#
+# This file is OPTIONAL. Without it, the auth-svc uses:
+#   port = 63108  (derived: 1024 + crc32("evm") % 64511)
+#   pending_dir = /run/libpam-web3/pending
+#   cert/key = /etc/libpam-web3/tls/{cert,key}.pem
+#   pages_dir = /usr/share/blockhost/signing-pages/evm
+
+[server]
+# Override the derived port if needed
+# port = 63108
+# pending_dir = "/run/libpam-web3/pending"
+# cert = "/etc/libpam-web3/tls/cert.pem"
+# key = "/etc/libpam-web3/tls/key.pem"
+# pages_dir = "/usr/share/blockhost/signing-pages/evm"

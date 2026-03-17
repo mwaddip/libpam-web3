@@ -1,0 +1,14 @@
+[Unit]
+Description=Web3 Auth Service (EVM)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/web3-auth-svc-evm
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

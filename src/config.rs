@@ -41,8 +41,6 @@ pub struct MachineConfig {
 /// Authentication settings
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthConfig {
-    /// URL where users can sign the OTP
-    pub signing_url: String,
     /// OTP code length (default: 6)
     #[serde(default = "default_otp_length")]
     pub otp_length: usize,
@@ -126,7 +124,6 @@ id = "my-server"
 secret_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 [auth]
-signing_url = "https://example.com/sign"
 "#;
 
         let config: Config = toml::from_str(config_str).unwrap();
@@ -144,7 +141,6 @@ id = "server-prod-01"
 secret_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 [auth]
-signing_url = "https://auth.example.com/verify"
 otp_length = 8
 otp_ttl_seconds = 600
 "#;
@@ -163,7 +159,6 @@ otp_ttl_seconds = 600
 id = "my-server"
 
 [auth]
-signing_url = "https://example.com/sign"
 "#;
 
         let config: Config = toml::from_str(config_str).unwrap();
@@ -178,7 +173,6 @@ id = "my-server"
 secret_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 [auth]
-signing_url = "https://example.com/sign"
 "#;
 
         let config: Config = toml::from_str(config_str).unwrap();
@@ -195,7 +189,6 @@ id = "my-server"
 secret_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 [auth]
-signing_url = "https://example.com/sign"
 "#;
 
         let config: Config = toml::from_str(config_str).unwrap();
@@ -212,7 +205,6 @@ id = "my-server"
 secret_key = "0xdeadbeef"
 
 [auth]
-signing_url = "https://example.com/sign"
 "#;
 
         let config: Config = toml::from_str(config_str).unwrap();
@@ -228,7 +220,6 @@ id = "my-server"
 secret_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 [auth]
-signing_url = "https://example.com/sign"
 otp_length = 3
 "#;
         let config: Config = toml::from_str(config_str).unwrap();
@@ -241,7 +232,6 @@ id = "my-server"
 secret_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 [auth]
-signing_url = "https://example.com/sign"
 otp_length = 20
 "#;
         let config: Config = toml::from_str(config_str).unwrap();

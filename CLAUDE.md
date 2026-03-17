@@ -69,7 +69,6 @@ id = "server-name"
 secret_key = "0x..."      # HMAC key for OTP generation
 
 [auth]
-signing_url = "https://..."
 otp_length = 6
 otp_ttl_seconds = 300
 ```
@@ -83,12 +82,13 @@ otp_ttl_seconds = 300
 5. Signature delivery (two paths):
    - **Callback mode**: Browser auto-fills OTP/machine from session, POSTs signature to auth service → user presses Enter
    - **Manual mode**: User copy-pastes signature into terminal (fallback when no auth service running)
-6. Signature detection (source-dependent):
+6. Signature dispatch (source-dependent):
    - **Manual paste** → always EVM: secp256k1 ecrecover → wallet address
-   - **Callback .sig file** → try JSON first, fall back to EVM:
-     - **JSON** `{otp, machine_id, wallet_address}` → OPNet path: validate OTP → use wallet address
-     - **Raw hex** → EVM path: ecrecover → wallet address
-7. GECOS lookup: scan `/etc/passwd` for `wallet=ADDRESS` match (case-insensitive)
+   - **Callback .sig file** → two-tier detection:
+     - **Raw hex** (0x + 130 chars) → EVM: ecrecover → wallet address
+     - **JSON with `chain`** → chain-specific handler (opnet, cardano, etc.)
+     - **JSON without `chain`** → reject
+7. Confirm verified wallet matches GECOS `wallet=ADDRESS` for the SSH username (case-insensitive)
 8. Return username to PAM
 
 ## IPC Contracts
@@ -108,24 +108,33 @@ Written by PAM to `/run/libpam-web3/pending/{session_id}.json`:
 
 Written by auth service to `/run/libpam-web3/pending/{session_id}.sig`:
 
-**EVM** (raw hex):
+**Dispatch logic:**
+1. Starts with `0x` and is 132 chars → **EVM** (built-in ecrecover)
+2. Valid JSON with `chain` field → dispatch to chain-specific handler
+3. Valid JSON without `chain` → **reject**
+4. Anything else → **reject**
+
+**EVM** (raw hex — no JSON wrapper):
 ```
 0x + 130 hex chars (65-byte secp256k1 signature)
 ```
 
-**OPNet** (JSON — callback only, never accepted from manual paste):
+**OPNet** (JSON with `chain` field):
 ```json
-{"otp":"123456","machine_id":"server-name","wallet_address":"0xAbCd...1234"}
+{"chain":"opnet","otp":"123456","machine_id":"server-name","wallet_address":"0xAbCd...1234"}
 ```
 
-- `wallet_address` is chain-agnostic (EVM `0x...`, Bitcoin `bc1q...`, etc.)
-- Must match the GECOS `wallet=ADDRESS` field (case-insensitive)
-- Must not be empty
-- All three fields required; extra fields ignored
+**Cardano** (JSON with `chain` field):
+```json
+{"chain":"cardano","signature":"<hex COSE_Sign1>","public_key":"<hex COSE_Key>","otp":"123456","machine_id":"server-name"}
+```
 
-**Trust model**: OPNet JSON trusts the `wallet_address` without cryptographic proof — the auth service must have verified the wallet signature before writing the .sig file. This is why JSON is rejected from manual paste (the OTP is displayed on screen, so terminal input carries no proof of wallet ownership).
+**Trust model**: Non-EVM `.sig` files are JSON with a mandatory `chain` field. Each chain has its own trust model:
+- **EVM**: Cryptographic proof — ecrecover derives address from signature (built into PAM).
+- **OPNet**: Trusted assertion — auth-svc verifies the ML-DSA signature (~2KB, not included in `.sig`), PAM re-validates OTP as defense-in-depth.
+- **Cardano**: Cryptographic proof — `.sig` carries the full COSE_Sign1 signature and COSE_Key public key for independent Ed25519 verification.
 
-Non-JSON content falls through to EVM ecrecover (fail-secure: invalid hex → deny).
+See `docs/specs/` for detailed per-chain specifications.
 
 ## GECOS Format
 

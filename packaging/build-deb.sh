@@ -39,7 +39,7 @@ mkdir -p "$PKG_DIR/etc/pam_web3"
 mkdir -p "$PKG_DIR/usr/share/doc/${PKG_NAME}"
 mkdir -p "$PKG_DIR/usr/share/doc/${PKG_NAME}/examples"
 
-# Copy binaries
+# Copy PAM module
 echo "[3/4] Copying files..."
 cp "$PROJECT_DIR/target/release/libpam_web3.so" "$PKG_DIR/lib/x86_64-linux-gnu/security/"
 
@@ -108,6 +108,8 @@ case "$1" in
             fi
         fi
 
+        systemctl daemon-reload
+
         echo ""
         echo "=== libpam-web3 installed ==="
         echo ""
@@ -134,6 +136,10 @@ chmod 755 "$PKG_DIR/DEBIAN/postinst"
 cat > "$PKG_DIR/DEBIAN/prerm" << 'EOF'
 #!/bin/bash
 set -e
+case "$1" in
+    remove|upgrade)
+        ;;
+esac
 exit 0
 EOF
 chmod 755 "$PKG_DIR/DEBIAN/prerm"
@@ -171,8 +177,6 @@ id = "my-server"
 secret_key = "CHANGE_ME_generate_with_openssl_rand_hex_32"
 
 [auth]
-# URL where users can sign messages (displayed during login)
-signing_url = "https://your-signing-page.example.com"
 # OTP settings
 otp_length = 6
 otp_ttl_seconds = 300
