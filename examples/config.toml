@@ -18,13 +18,14 @@ id = "my-server"
 secret_key = "0x<your-64-char-hex-key>"
 
 [auth]
-# URL to the signing page
-signing_url = "https://your-signing-page.example.com"
-
 # OTP settings
 otp_length = 6           # 4-19 digits (default: 6)
 otp_ttl_seconds = 300    # seconds before OTP expires (default: 300)
 
+# Signing URL is derived automatically from the hostname and chain:
+#   https://{fqdn}:{crc32_port(chain)}?session={id}
+# No signing_url config needed.
+#
 # Callback mode (browser auto-posts signature) is detected at runtime:
 # if /run/libpam-web3/pending/ exists, callback sessions are created
 # automatically. No config flag needed.
