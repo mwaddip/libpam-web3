@@ -236,7 +236,6 @@ Quick Setup
 2. Edit /etc/pam_web3/config.toml:
    - Set machine.id to identify this server
    - Set machine.secret_key (generate with: openssl rand -hex 32)
-   - Set auth.signing_url to your signing page
 
 3. Configure PAM. Edit /etc/pam.d/sshd:
 
