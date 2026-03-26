@@ -8,7 +8,7 @@
 #
 # Usage: ./packaging/build-deb.sh
 #
-# Requirements: dpkg-deb (apt install dpkg)
+# Requirements: dpkg-deb, cargo-zigbuild, zig (in PATH)
 #
 
 set -e
@@ -26,10 +26,23 @@ echo "=== Building libpam-web3 ${VERSION} for ${ARCH} ==="
 rm -rf "$PKG_DIR"
 rm -f "$SCRIPT_DIR/${PKG_NAME}_${VERSION}_${ARCH}.deb"
 
-# Build PAM module
+# Check build dependencies
+if ! command -v cargo-zigbuild &> /dev/null; then
+    echo "ERROR: cargo-zigbuild not found. Install with: cargo install cargo-zigbuild"
+    exit 1
+fi
+if ! command -v zig &> /dev/null; then
+    echo "ERROR: zig not found. See https://ziglang.org/download/"
+    exit 1
+fi
+
+# Build PAM module (target glibc 2.36 for Debian 12 compatibility)
 echo "[1/4] Building PAM module..."
 cd "$PROJECT_DIR"
-cargo build --release
+ZIG_TARGET="x86_64-unknown-linux-gnu.2.36"
+BINDGEN_EXTRA_CLANG_ARGS="--sysroot=/ -I/usr/include" \
+RUSTFLAGS="-L /usr/lib/x86_64-linux-gnu" \
+cargo zigbuild --release --target "$ZIG_TARGET"
 
 # Create package directory structure
 echo "[2/4] Creating package structure..."
@@ -41,7 +54,7 @@ mkdir -p "$PKG_DIR/usr/share/doc/${PKG_NAME}/examples"
 
 # Copy PAM module
 echo "[3/4] Copying files..."
-cp "$PROJECT_DIR/target/release/libpam_web3.so" "$PKG_DIR/lib/x86_64-linux-gnu/security/"
+cp "$PROJECT_DIR/target/x86_64-unknown-linux-gnu/release/libpam_web3.so" "$PKG_DIR/lib/x86_64-linux-gnu/security/"
 
 # Create control file
 cat > "$PKG_DIR/DEBIAN/control" << EOF
@@ -50,7 +63,7 @@ Version: ${VERSION}
 Section: admin
 Priority: optional
 Architecture: ${ARCH}
-Depends: libc6 (>= 2.31), libpam-runtime
+Depends: libc6 (>= 2.34), libpam-runtime
 Maintainer: libpam-web3 maintainers
 Homepage: https://github.com/mwaddip/libpam-web3
 Description: PAM module for wallet-based authentication
