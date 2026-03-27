@@ -79,7 +79,6 @@ Description: PAM module for wallet-based authentication
   - Challenge-response OTP authentication
   - Runtime callback detection (no config needed)
  .
- For admin tools (key generation, encryption), install libpam-web3-tools.
 EOF
 
 # Create conffiles
@@ -254,7 +253,6 @@ Quick Setup
 
    systemctl restart sshd
 
-For admin tools (key generation, encryption), install libpam-web3-tools.
 EOF
 
 # Example PAM config
@@ -303,14 +301,6 @@ if [ -f "$DEB_FILE" ]; then
     echo ""
     echo "To install:"
     echo "  sudo dpkg -i $DEB_FILE"
-    echo ""
-    echo "For server-side tools, also build:"
-    echo "  ./build-deb-tools.sh"
-
-    # Clean build caches so stale artifacts can't break the next build
-    echo ""
-    echo "Cleaning build caches..."
-    cd "$PROJECT_DIR" && cargo clean
 else
     echo "ERROR: Package build failed"
     exit 1

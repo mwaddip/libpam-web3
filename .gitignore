@@ -1,14 +1,6 @@
 # Build artifacts
 /target/
-/web3-auth-svc/target/
 Cargo.lock
-
-# Foundry
-/contracts/out/
-/contracts/cache/
-/contracts/lib/
-/contracts/broadcast/
-/contracts/foundry.lock
 
 # IDE
 .idea/
@@ -24,17 +16,17 @@ Thumbs.db
 # Secrets (never commit these!)
 *.key
 *.secret
-ldap.secret
+*.pem
 
 # Internal planning files
 PLAN.md
-.gitmodules
 
 # Packaging artifacts
 /packaging/*.deb
 /packaging/libpam-web3_*/
-packaging/*_amd64/
+/packaging/libpam-web3-*/
 
-# Signing page build artifacts
-/signing-page/signing-page.b64
-/signing-page/signing-page.datauri
+# Plugin build artifacts
+/plugins/*/auth-svc.js
+/plugins/*/node_modules/
+/plugins/*/package-lock.json

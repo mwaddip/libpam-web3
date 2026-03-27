@@ -10,19 +10,6 @@
 
 See `SPECIAL.md` for full stat definitions and the priority allocation model.
 
-## Environment Variables
-
-**Essential environment variables are stored in `~/projects/sharedenv/`**
-
-- `blockhost.env` - Deployer keys, contract addresses, RPC endpoints
-
-Load before deploying or interacting with contracts:
-```bash
-source ~/projects/sharedenv/blockhost.env
-```
-
----
-
 ## Project Overview
 
 PAM module for Linux authentication via wallet signatures. Verifies identity through signature verification, then maps wallet addresses to Linux usernames via GECOS fields.
@@ -40,9 +27,8 @@ src/
 ├── config.rs        # TOML config loading (/etc/pam_web3/config.toml)
 ├── otp.rs           # OTP generation (HMAC-SHA3, machine_id + timestamp)
 ├── signature.rs     # secp256k1 ecrecover (personal_sign format)
-└── passwd_lookup.rs # GECOS wallet address lookup (wallet=ADDRESS)
-
-contracts/           # Solidity: AccessCredentialNFT (ERC-721)
+├── passwd_lookup.rs # GECOS wallet address lookup (wallet=ADDRESS)
+└── plugin.rs        # Plugin discovery, dispatch, subprocess invocation
 ```
 
 ## Build Commands
@@ -197,33 +183,3 @@ git diff --cached --name-only | xargs grep -l -E '(0x[a-fA-F0-9]{64}|password|se
 3. **Displayed secrets are public**: Any value shown to the user (OTP, machine_id, signing URL) must be treated as attacker-known. Auth decisions must not depend solely on knowledge of displayed values.
 4. **Fail-secure on every branch**: Trace every early return and error path — does it deny access? A missed error check is an auth bypass.
 
----
-
-## Subproject Documentation
-
-Each major component has its own documentation:
-
-| Directory | Documentation | Purpose |
-|-----------|---------------|---------|
-| `contracts/` | `CLAUDE.md`, `PROJECT.yaml` | Smart contract specs, encryption flows |
-
-### PROJECT.yaml Maintenance (CRITICAL)
-
-**You MUST maintain `PROJECT.yaml` files when modifying code.**
-
-These files are machine-readable specifications that:
-- Document architecture, flows, and privacy properties
-- Enable future Claude sessions to understand the codebase
-- Track breaking changes and migration paths
-
-**When to update PROJECT.yaml:**
-- Adding/modifying functions or data structures
-- Changing encryption or authentication flows
-- Adding features or making breaking changes
-- Updating dependencies or build processes
-
-**The `contracts/PROJECT.yaml` is especially important** as it documents:
-- Privacy model (hostnames NEVER in plaintext on-chain)
-- Encryption flows (ECIES for server, AES-GCM for user)
-- Complete NFT minting and authentication flows
-- Contract interface and function signatures
