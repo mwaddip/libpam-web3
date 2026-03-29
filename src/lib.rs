@@ -268,13 +268,31 @@ fn chain_port(chain: &str) -> u16 {
     (1024 + ((crc ^ 0xFFFF_FFFF) % 64511)) as u16
 }
 
+/// Read the pre-resolved signing host from `/run/libpam-web3/signing_host`.
+///
+/// Written once at boot by `libpam-web3-signing-host.service` which checks
+/// public DNS, falls back to sslip.io.  If the file doesn't exist (service
+/// not running), falls back to `derive_hostname()`.
+fn read_signing_host() -> String {
+    match std::fs::read_to_string("/run/libpam-web3/signing_host") {
+        Ok(s) => {
+            let trimmed = s.trim().to_string();
+            if !trimmed.is_empty() {
+                return trimmed;
+            }
+        }
+        Err(_) => {}
+    }
+    derive_hostname()
+}
+
 /// Build the signing URL for the given chain.
 ///
-/// Format: `https://{fqdn}:{derived_port}`
+/// Format: `https://{signing_host}:{derived_port}`
 fn signing_url_for(chain: &str) -> String {
-    let hostname = derive_hostname();
+    let host = read_signing_host();
     let port = chain_port(chain);
-    format!("https://{}:{}", hostname, port)
+    format!("https://{}:{}", host, port)
 }
 
 /// Log to syslog for debugging

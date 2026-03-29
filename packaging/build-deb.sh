@@ -49,12 +49,16 @@ echo "[2/4] Creating package structure..."
 mkdir -p "$PKG_DIR/DEBIAN"
 mkdir -p "$PKG_DIR/lib/x86_64-linux-gnu/security"
 mkdir -p "$PKG_DIR/etc/pam_web3"
+mkdir -p "$PKG_DIR/usr/share/libpam-web3"
+mkdir -p "$PKG_DIR/lib/systemd/system"
 mkdir -p "$PKG_DIR/usr/share/doc/${PKG_NAME}"
 mkdir -p "$PKG_DIR/usr/share/doc/${PKG_NAME}/examples"
 
-# Copy PAM module
+# Copy PAM module and signing host resolver
 echo "[3/4] Copying files..."
 cp "$PROJECT_DIR/target/x86_64-unknown-linux-gnu/release/libpam_web3.so" "$PKG_DIR/lib/x86_64-linux-gnu/security/"
+cp "$PROJECT_DIR/signing-host/resolve-signing-host.sh" "$PKG_DIR/usr/share/libpam-web3/"
+cp "$PROJECT_DIR/signing-host/libpam-web3-signing-host.service" "$PKG_DIR/lib/systemd/system/"
 
 # Create control file
 cat > "$PKG_DIR/DEBIAN/control" << EOF
@@ -121,6 +125,7 @@ case "$1" in
         fi
 
         systemctl daemon-reload
+        systemctl enable --now libpam-web3-signing-host 2>/dev/null || true
 
         echo ""
         echo "=== libpam-web3 installed ==="
@@ -150,6 +155,8 @@ cat > "$PKG_DIR/DEBIAN/prerm" << 'EOF'
 set -e
 case "$1" in
     remove|upgrade)
+        systemctl stop libpam-web3-signing-host 2>/dev/null || true
+        systemctl disable libpam-web3-signing-host 2>/dev/null || true
         ;;
 esac
 exit 0

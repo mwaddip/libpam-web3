@@ -1,0 +1,14 @@
+[Unit]
+Description=Resolve signing host for libpam-web3
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/share/libpam-web3/resolve-signing-host.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
