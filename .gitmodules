@@ -4,3 +4,6 @@
 [submodule "plugins/opnet"]
 	path = plugins/opnet
 	url = git@github.com:mwaddip/libpam-web3-opnet.git
+[submodule "plugins/ergo"]
+	path = plugins/ergo
+	url = git@github.com:mwaddip/libpam-web3-ergo.git
