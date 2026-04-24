@@ -47,6 +47,10 @@ pub struct AuthConfig {
     /// OTP validity in seconds (default: 300)
     #[serde(default = "default_otp_ttl")]
     pub otp_ttl_seconds: u64,
+    /// Whether to use TLS for the signing URL (default: true).
+    /// Set to false for network backends that provide their own encryption (Tor, mesh, etc.).
+    #[serde(default = "default_use_tls")]
+    pub use_tls: bool,
 }
 
 // Default value functions
@@ -56,6 +60,10 @@ fn default_otp_length() -> usize {
 
 fn default_otp_ttl() -> u64 {
     300
+}
+
+fn default_use_tls() -> bool {
+    true
 }
 
 impl Config {

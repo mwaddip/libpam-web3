@@ -288,11 +288,15 @@ fn read_signing_host() -> String {
 
 /// Build the signing URL for the given chain.
 ///
-/// Format: `https://{signing_host}:{derived_port}`
+/// Format: `{scheme}://{signing_host}:{derived_port}` where scheme is
+/// `https` by default, or `http` when `auth.use_tls = false` in config
+/// (for backends like Tor that provide their own encryption).
 fn signing_url_for(chain: &str) -> String {
     let host = read_signing_host();
     let port = chain_port(chain);
-    format!("https://{}:{}", host, port)
+    let use_tls = Config::load().map(|c| c.auth.use_tls).unwrap_or(true);
+    let scheme = if use_tls { "https" } else { "http" };
+    format!("{}://{}:{}", scheme, host, port)
 }
 
 /// Log to syslog for debugging
