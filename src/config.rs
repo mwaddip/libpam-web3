@@ -103,6 +103,14 @@ impl Config {
             ));
         }
 
+        // OTP TTL must be a sane window: too long defeats replay protection,
+        // too short makes legitimate auth impossible.
+        if self.auth.otp_ttl_seconds < 30 || self.auth.otp_ttl_seconds > 3600 {
+            return Err(ConfigError::InvalidConfig(
+                "auth.otp_ttl_seconds must be between 30 and 3600".to_string(),
+            ));
+        }
+
         Ok(())
     }
 
@@ -244,5 +252,27 @@ otp_length = 20
 "#;
         let config: Config = toml::from_str(config_str).unwrap();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_otp_ttl_bounds() {
+        let base = r#"
+[machine]
+id = "my-server"
+secret_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+[auth]
+"#;
+        // Too short
+        let cfg: Config = toml::from_str(&format!("{}otp_ttl_seconds = 10\n", base)).unwrap();
+        assert!(cfg.validate().is_err());
+
+        // Too long
+        let cfg: Config = toml::from_str(&format!("{}otp_ttl_seconds = 7200\n", base)).unwrap();
+        assert!(cfg.validate().is_err());
+
+        // OK
+        let cfg: Config = toml::from_str(&format!("{}otp_ttl_seconds = 300\n", base)).unwrap();
+        assert!(cfg.validate().is_ok());
     }
 }

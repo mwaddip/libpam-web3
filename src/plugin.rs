@@ -203,27 +203,6 @@ pub fn invoke(
     exec_plugin(&path, &input_json)
 }
 
-/// Invoke a discovered plugin directly (skips path lookup).
-pub fn invoke_discovered(
-    plugin: &DiscoveredPlugin,
-    sig_json: &serde_json::Value,
-    otp_message: &str,
-    wallet_address: &str,
-) -> PluginResult {
-    let input = VerifyInput {
-        sig: sig_json,
-        otp_message,
-        wallet_address,
-    };
-
-    let input_json = match serde_json::to_string(&input) {
-        Ok(j) => j,
-        Err(e) => return PluginResult::ExecError(format!("failed to serialize input: {}", e)),
-    };
-
-    exec_plugin(&plugin.path, &input_json)
-}
-
 // ── Shared helpers ───────────────────────────────────────────────────
 
 /// Return the path to a plugin binary for the given chain.
@@ -380,18 +359,19 @@ mod tests {
         assert!(plugins.is_empty());
     }
 
-    /// Write a temp shell script and return its path. Closes the writable fd
-    /// so the kernel will let us `execve` it (otherwise: ETXTBSY).
-    fn write_test_script(body: &str) -> tempfile::TempPath {
-        use std::io::Write;
-        use std::os::unix::fs::PermissionsExt;
-        let mut f = tempfile::NamedTempFile::new().unwrap();
-        f.write_all(body.as_bytes()).unwrap();
-        f.flush().unwrap();
-        let mut perms = f.as_file().metadata().unwrap().permissions();
-        perms.set_mode(0o755);
-        f.as_file().set_permissions(perms).unwrap();
-        f.into_temp_path()
+    /// Spawn `/bin/sh -c <script>` with piped stdio. We don't write the
+    /// script to a temp file because cargo runs tests in parallel and the
+    /// other test threads' open writable fds get inherited across forks,
+    /// triggering ETXTBSY on exec.
+    fn spawn_sh(script: &str) -> std::process::Child {
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
     }
 
     /// Regression: a child writing more than the OS pipe buffer (~64KB) used to
@@ -401,19 +381,9 @@ mod tests {
     fn test_wait_with_timeout_handles_large_output() {
         // 200KB to stdout AND 200KB to stderr — exercises both drainers past
         // the pipe-buffer threshold simultaneously.
-        let script = write_test_script(
-            "#!/bin/sh\n\
-             yes A | head -c 200000\n\
-             yes B | head -c 200000 >&2\n\
-             exit 0\n",
+        let mut child = spawn_sh(
+            "yes A | head -c 200000; yes B | head -c 200000 >&2; exit 0",
         );
-
-        let mut child = Command::new(&script)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
         drop(child.stdin.take());
 
         let output = wait_with_timeout(&mut child, Duration::from_secs(10))
@@ -425,21 +395,11 @@ mod tests {
 
     /// Regression: if a child runs longer than the timeout, wait_with_timeout
     /// must kill it (so drainers see EOF) and return Err without leaking
-    /// threads. Use `exec sleep` so the shell hands its pipes to sleep — when
+    /// threads. `exec sleep` makes the shell hand its pipes to sleep — when
     /// we kill the shell, sleep is killed too and pipes close cleanly.
     #[test]
     fn test_wait_with_timeout_kills_runaway_child() {
-        let script = write_test_script(
-            "#!/bin/sh\n\
-             exec sleep 60\n",
-        );
-
-        let mut child = Command::new(&script)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        let mut child = spawn_sh("exec sleep 60");
         drop(child.stdin.take());
 
         let result = wait_with_timeout(&mut child, Duration::from_millis(500));

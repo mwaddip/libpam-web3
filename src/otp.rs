@@ -87,17 +87,17 @@ impl Otp {
             return Err(OtpError::Expired);
         }
 
-        // Verify code matches
-        if code != self.code {
+        // All comparisons are constant-time so we don't leak which prefix
+        // matched on a failed attempt — defense-in-depth even though the
+        // OTP itself is short-lived and the machine_id is publicly visible.
+        if !constant_time_eq(code.as_bytes(), self.code.as_bytes()) {
             return Err(OtpError::VerificationFailed);
         }
 
-        // Verify machine ID matches
-        if machine_id != self.machine_id {
+        if !constant_time_eq(machine_id.as_bytes(), self.machine_id.as_bytes()) {
             return Err(OtpError::VerificationFailed);
         }
 
-        // Verify HMAC
         let expected_hmac = Self::compute_hmac(&self.code, self.created_at, &self.machine_id, secret);
         if !constant_time_eq(&self.hmac, &expected_hmac) {
             return Err(OtpError::VerificationFailed);

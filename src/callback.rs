@@ -6,8 +6,8 @@
 //! eliminating copy-paste round-trips.
 
 use rand::Rng;
-use std::fs;
-use std::io;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -50,16 +50,23 @@ impl Session {
             io::Error::new(io::ErrorKind::Other, e)
         })?;
 
-        // Atomic write: .tmp → sync → rename
+        // Atomic write: open+write+fsync the .tmp, rename into place,
+        // then fsync the parent directory so the rename survives a crash.
         let tmp_path = pending_dir.join(format!("{}.tmp", session_id));
         let json_path = pending_dir.join(format!("{}.json", session_id));
 
-        fs::write(&tmp_path, data.as_bytes())?;
-        // fsync the file
-        let f = fs::File::open(&tmp_path)?;
-        f.sync_all()?;
-        drop(f);
+        {
+            let mut f = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp_path)?;
+            f.write_all(data.as_bytes())?;
+            f.sync_all()?;
+        }
         fs::rename(&tmp_path, &json_path)?;
+        if let Ok(dir) = fs::File::open(&pending_dir) {
+            let _ = dir.sync_all();
+        }
 
         Ok(session)
     }

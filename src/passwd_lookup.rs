@@ -1,134 +1,84 @@
-//! Passwd-based wallet address lookup
+//! Passwd-based wallet address lookup.
 //!
-//! Maps wallet addresses to Linux usernames by scanning /etc/passwd for users
-//! with "wallet=ADDRESS" in their GECOS (comment) field.
+//! Maps a Linux username to a wallet address by reading the user's GECOS
+//! field via libc's `getpwnam_r`, which honors NSS — local /etc/passwd,
+//! LDAP, sssd, systemd-userdb, etc. — instead of parsing /etc/passwd by hand.
 //!
 //! # GECOS Field Format
-//!
-//! The module looks for the pattern `wallet=ADDRESS` in the GECOS field:
 //!
 //! ```text
 //! johndoe:x:1001:1001:wallet=0x1234...abcd:/home/johndoe:/bin/bash
 //! janedoe:x:1002:1002:wallet=0xabcd...1234,nft=5:/home/janedoe:/bin/bash
 //! ```
 //!
-//! The wallet address can appear anywhere in the GECOS field, separated by
-//! commas or as the entire field. Matching is case-insensitive.
+//! The wallet address can appear anywhere in the GECOS field, comma-separated.
 
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::ffi::{CStr, CString};
 use thiserror::Error;
-
-const PASSWD_PATH: &str = "/etc/passwd";
 
 #[derive(Debug, Error)]
 pub enum PasswdLookupError {
-    #[error("failed to read passwd file: {0}")]
-    ReadError(#[from] std::io::Error),
+    #[error("getpwnam_r failed: {0}")]
+    SystemError(std::io::Error),
+    #[error("invalid username")]
+    InvalidUsername,
     #[error("wallet address not found in passwd")]
     WalletNotFound,
 }
 
-/// Result of a successful passwd lookup
-#[derive(Debug)]
-pub struct PasswdLookupResult {
-    pub username: String,
-}
-
-/// Look up the wallet address for a specific username from /etc/passwd.
+/// Look up the wallet address for a username via NSS.
 ///
-/// Reads the user's GECOS field and extracts the wallet=ADDRESS value.
+/// Uses `getpwnam_r` — the thread-safe, NSS-aware variant — to find the
+/// user's GECOS field and extract `wallet=ADDRESS` from it.
 pub fn lookup_wallet_for_user(username: &str) -> Result<String, PasswdLookupError> {
-    lookup_wallet_for_user_from_file(username, PASSWD_PATH)
-}
+    let username_c = CString::new(username).map_err(|_| PasswdLookupError::InvalidUsername)?;
 
-/// Look up the wallet address for a specific username from a specific passwd file.
-pub fn lookup_wallet_for_user_from_file(
-    username: &str,
-    passwd_path: &str,
-) -> Result<String, PasswdLookupError> {
-    let file = File::open(passwd_path)?;
-    let reader = BufReader::new(file);
+    // getpwnam_r writes string pointers into our buffer. Start at 4KB and
+    // grow on ERANGE — this matches what glibc's _SC_GETPW_R_SIZE_MAX
+    // typically reports and is plenty for any sane GECOS.
+    let mut buf = vec![0u8; 4096];
+    loop {
+        let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut result: *mut libc::passwd = std::ptr::null_mut();
 
-    for line in reader.lines() {
-        let line = line?;
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
+        let rc = unsafe {
+            libc::getpwnam_r(
+                username_c.as_ptr(),
+                &mut pwd,
+                buf.as_mut_ptr() as *mut libc::c_char,
+                buf.len(),
+                &mut result,
+            )
+        };
 
-        let fields: Vec<&str> = line.split(':').collect();
-        if fields.len() < 5 {
-            continue;
-        }
-
-        if fields[0] == username {
-            let gecos = fields[4];
-            if let Some(address) = extract_wallet_address(gecos) {
-                return Ok(address);
+        if rc == libc::ERANGE {
+            if buf.len() >= 1 << 20 {
+                return Err(PasswdLookupError::SystemError(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "passwd buffer exceeded 1MB",
+                )));
             }
+            buf.resize(buf.len() * 2, 0);
+            continue;
+        }
+        if rc != 0 {
+            return Err(PasswdLookupError::SystemError(
+                std::io::Error::from_raw_os_error(rc),
+            ));
+        }
+        if result.is_null() {
             return Err(PasswdLookupError::WalletNotFound);
         }
+
+        let gecos = unsafe { CStr::from_ptr(pwd.pw_gecos) }
+            .to_str()
+            .map_err(|_| PasswdLookupError::WalletNotFound)?;
+
+        return extract_wallet_address(gecos).ok_or(PasswdLookupError::WalletNotFound);
     }
-
-    Err(PasswdLookupError::WalletNotFound)
 }
 
-/// Look up a username by wallet address in /etc/passwd
-///
-/// Searches the GECOS field of each passwd entry for "wallet=ADDRESS".
-/// Matching is case-insensitive on the address portion.
-pub fn lookup_by_wallet_address(
-    wallet_address: &str,
-) -> Result<PasswdLookupResult, PasswdLookupError> {
-    lookup_by_wallet_address_from_file(wallet_address, PASSWD_PATH)
-}
-
-/// Look up a username by wallet address from a specific passwd file
-/// (useful for testing)
-pub fn lookup_by_wallet_address_from_file(
-    wallet_address: &str,
-    passwd_path: &str,
-) -> Result<PasswdLookupResult, PasswdLookupError> {
-    let normalized_target = wallet_address.to_lowercase();
-
-    let file = File::open(passwd_path)?;
-    let reader = BufReader::new(file);
-
-    for line in reader.lines() {
-        let line = line?;
-
-        // Skip empty lines and comments
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-
-        // Parse passwd entry: username:password:uid:gid:gecos:home:shell
-        let fields: Vec<&str> = line.split(':').collect();
-        if fields.len() < 5 {
-            continue;
-        }
-
-        let username = fields[0];
-        let gecos = fields[4];
-
-        // Check if GECOS contains wallet=ADDRESS
-        if let Some(found_address) = extract_wallet_address(gecos) {
-            if found_address.to_lowercase() == normalized_target {
-                return Ok(PasswdLookupResult {
-                    username: username.to_string(),
-                });
-            }
-        }
-    }
-
-    Err(PasswdLookupError::WalletNotFound)
-}
-
-/// Extract wallet address from a GECOS field
-///
-/// Looks for patterns like:
-/// - "wallet=0x1234...abcd" (entire field or comma-separated part)
-/// - "wallet=0xAbCd...1234,nft=5"
+/// Extract wallet address from a GECOS field.
 fn extract_wallet_address(gecos: &str) -> Option<String> {
     for part in gecos.split(',') {
         let part = part.trim();
@@ -142,108 +92,6 @@ fn extract_wallet_address(gecos: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    fn create_test_passwd(content: &str) -> NamedTempFile {
-        let mut file = NamedTempFile::new().unwrap();
-        file.write_all(content.as_bytes()).unwrap();
-        file.flush().unwrap();
-        file.as_file().sync_all().unwrap();
-        file
-    }
-
-    #[test]
-    fn test_simple_lookup() {
-        let passwd = create_test_passwd(concat!(
-            "root:x:0:0:root:/root:/bin/bash\n",
-            "johndoe:x:1001:1001:wallet=0x1234567890abcdef1234567890abcdef12345678:/home/johndoe:/bin/bash\n",
-            "janedoe:x:1002:1002:wallet=0xabcdef1234567890abcdef1234567890abcdef12:/home/janedoe:/bin/bash\n",
-        ));
-
-        let path = passwd.path().to_str().unwrap();
-        let result = lookup_by_wallet_address_from_file(
-            "0x1234567890abcdef1234567890abcdef12345678",
-            path,
-        )
-        .unwrap();
-        assert_eq!(result.username, "johndoe");
-
-        let result = lookup_by_wallet_address_from_file(
-            "0xabcdef1234567890abcdef1234567890abcdef12",
-            path,
-        )
-        .unwrap();
-        assert_eq!(result.username, "janedoe");
-    }
-
-    #[test]
-    fn test_case_insensitive_lookup() {
-        let passwd = create_test_passwd(
-            "johndoe:x:1001:1001:wallet=0xAbCdEf1234567890AbCdEf1234567890AbCdEf12:/home/johndoe:/bin/bash\n",
-        );
-
-        let path = passwd.path().to_str().unwrap();
-        // Search with lowercase
-        let result = lookup_by_wallet_address_from_file(
-            "0xabcdef1234567890abcdef1234567890abcdef12",
-            path,
-        )
-        .unwrap();
-        assert_eq!(result.username, "johndoe");
-
-        // Search with uppercase
-        let result = lookup_by_wallet_address_from_file(
-            "0xABCDEF1234567890ABCDEF1234567890ABCDEF12",
-            path,
-        )
-        .unwrap();
-        assert_eq!(result.username, "johndoe");
-    }
-
-    #[test]
-    fn test_lookup_with_nft_field() {
-        let passwd = create_test_passwd(
-            "johndoe:x:1001:1001:wallet=0x1234567890abcdef1234567890abcdef12345678,nft=5:/home/johndoe:/bin/bash\n",
-        );
-
-        let result = lookup_by_wallet_address_from_file(
-            "0x1234567890abcdef1234567890abcdef12345678",
-            passwd.path().to_str().unwrap(),
-        )
-        .unwrap();
-        assert_eq!(result.username, "johndoe");
-    }
-
-    #[test]
-    fn test_wallet_not_found() {
-        let passwd = create_test_passwd(concat!(
-            "root:x:0:0:root:/root:/bin/bash\n",
-            "johndoe:x:1001:1001:wallet=0x1234567890abcdef1234567890abcdef12345678:/home/johndoe:/bin/bash\n",
-        ));
-
-        let result = lookup_by_wallet_address_from_file(
-            "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-            passwd.path().to_str().unwrap(),
-        );
-        assert!(matches!(result, Err(PasswdLookupError::WalletNotFound)));
-    }
-
-    #[test]
-    fn test_user_without_wallet() {
-        let passwd = create_test_passwd(concat!(
-            "root:x:0:0:root:/root:/bin/bash\n",
-            "normaluser:x:1000:1000:Normal User:/home/normal:/bin/bash\n",
-            "johndoe:x:1001:1001:wallet=0x1234567890abcdef1234567890abcdef12345678:/home/johndoe:/bin/bash\n",
-        ));
-
-        let result = lookup_by_wallet_address_from_file(
-            "0x1234567890abcdef1234567890abcdef12345678",
-            passwd.path().to_str().unwrap(),
-        )
-        .unwrap();
-        assert_eq!(result.username, "johndoe");
-    }
 
     #[test]
     fn test_extract_wallet_address() {
@@ -266,5 +114,32 @@ mod tests {
         assert_eq!(extract_wallet_address("Just a name"), None);
         assert_eq!(extract_wallet_address("nft=5"), None);
         assert_eq!(extract_wallet_address(""), None);
+    }
+
+    /// Smoke-test getpwnam_r against an entry the test environment is
+    /// guaranteed to have (root). We only assert that the lookup succeeds
+    /// (or returns WalletNotFound — root almost certainly has no `wallet=`
+    /// in GECOS, which is the expected outcome).
+    #[test]
+    fn test_lookup_root_returns_wallet_not_found() {
+        let result = lookup_wallet_for_user("root");
+        match result {
+            Err(PasswdLookupError::WalletNotFound) => {}
+            Ok(addr) => panic!("did not expect root to have wallet=: {}", addr),
+            Err(e) => panic!("unexpected error: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_lookup_unknown_user() {
+        let result = lookup_wallet_for_user("definitely-not-a-real-user-xyz");
+        assert!(matches!(result, Err(PasswdLookupError::WalletNotFound)));
+    }
+
+    #[test]
+    fn test_lookup_invalid_username() {
+        // NUL byte → CString::new fails
+        let result = lookup_wallet_for_user("foo\0bar");
+        assert!(matches!(result, Err(PasswdLookupError::InvalidUsername)));
     }
 }

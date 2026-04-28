@@ -42,8 +42,6 @@ toml = "0.8"
 regex = "1"
 
 
-[dev-dependencies]
-tempfile = "3"
 
 [profile.release]
 opt-level = 3

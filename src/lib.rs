@@ -47,19 +47,6 @@ const PAM_PROMPT_ECHO_OFF: c_int = 1;
 const PAM_TEXT_INFO: c_int = 4;
 const CALLBACK_GRACE_SECONDS: u64 = 10;
 
-/// Structured `.sig` file envelope — all non-EVM chains use this format.
-/// The `chain` field determines which verification path to use.
-#[derive(Debug, Deserialize)]
-struct SigEnvelope {
-    chain: String,
-    // Remaining fields are chain-specific; consumed by chain handlers
-    // that re-parse the full JSON. This catch-all prevents serde from
-    // rejecting unknown fields during envelope extraction.
-    #[serde(flatten)]
-    #[allow(dead_code)]
-    fields: serde_json::Value,
-}
-
 /// OPNet callback payload: wallet address + OTP delivered via trusted channel.
 /// The auth-svc verifies the ML-DSA signature before writing this — PAM trusts
 /// the wallet_address assertion and re-validates the OTP as defense-in-depth.
@@ -137,31 +124,37 @@ fn pam_prompt(
 
     let mut resp_ptr: *mut pam::ffi::pam_response = ptr::null_mut();
 
-    let result = unsafe { conv_fn(1, msg_ptr_ptr, &mut resp_ptr, conv.appdata_ptr) };
+    let conv_result = unsafe { conv_fn(1, msg_ptr_ptr, &mut resp_ptr, conv.appdata_ptr) };
 
-    if result != 0 {
+    // PAM convention: the conv fn may have allocated resp/resp_ptr even on
+    // a non-zero return. Free whatever is there before propagating the
+    // error so we don't leak per-prompt.
+    let extracted: Result<Option<String>, AuthError> = if !resp_ptr.is_null() {
+        let resp_str_ptr = unsafe { (*resp_ptr).resp };
+        let result = if !resp_str_ptr.is_null() {
+            match unsafe { CStr::from_ptr(resp_str_ptr) }.to_str() {
+                Ok(s) => Ok(Some(s.to_string())),
+                Err(_) => Err(AuthError::ConvError),
+            }
+        } else {
+            Ok(None)
+        };
+        unsafe {
+            if !resp_str_ptr.is_null() {
+                libc::free(resp_str_ptr as *mut c_void);
+            }
+            libc::free(resp_ptr as *mut c_void);
+        }
+        result
+    } else {
+        Ok(None)
+    };
+
+    if conv_result != 0 {
         return Err(AuthError::ConvError);
     }
 
-    if !resp_ptr.is_null() {
-        let resp = unsafe { &*resp_ptr };
-        if !resp.resp.is_null() {
-            let response = unsafe { CStr::from_ptr(resp.resp) }
-                .to_str()
-                .map_err(|_| AuthError::ConvError)?
-                .to_string();
-            unsafe {
-                libc::free(resp.resp as *mut c_void);
-                libc::free(resp_ptr as *mut c_void);
-            }
-            return Ok(Some(response));
-        }
-        unsafe {
-            libc::free(resp_ptr as *mut c_void);
-        }
-    }
-
-    Ok(None)
+    extracted
 }
 
 /// Get the PAM user (the username provided by the SSH client).
@@ -203,54 +196,26 @@ fn set_pam_user(handle: &PamHandle, username: &str) -> Result<(), AuthError> {
     Ok(())
 }
 
-/// Derive the machine's FQDN for signing URL construction.
+/// Fallback hostname when `/run/libpam-web3/signing_host` isn't available.
 ///
-/// Strategy:
-/// 1. `gethostname()` — returns the FQDN on cloud VMs where cloud-init sets it
-/// 2. `/etc/hosts` scan — finds the dotted alias for the short hostname
-/// 3. Fall back to the raw hostname if no FQDN is found
+/// Returns whatever `gethostname()` reports. The signing-host service is the
+/// authoritative source for the user-facing host (with public-DNS check and
+/// sslip.io fallback) — this is only used when that service hasn't run.
+///
+/// We deliberately do not consult `/etc/hosts`: an attacker with /etc/hosts
+/// write access already has root, and an unprivileged poison would be a
+/// usable phishing surface (attacker-controlled FQDN displayed in the
+/// auth prompt).
 fn derive_hostname() -> String {
     let mut buf = vec![0u8; 256];
-    let hostname = unsafe {
-        let ret = libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len());
-        if ret != 0 {
-            return "localhost".to_string();
-        }
-        match std::ffi::CStr::from_ptr(buf.as_ptr() as *const libc::c_char).to_str() {
-            Ok(s) => s.to_string(),
-            Err(_) => return "localhost".to_string(),
-        }
-    };
-
-    // Already FQDN (contains a dot)
-    if hostname.contains('.') {
-        return hostname;
+    let ret = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+    if ret != 0 {
+        return "localhost".to_string();
     }
-
-    // Scan /etc/hosts for a dotted alias for this hostname
-    if let Ok(content) = std::fs::read_to_string("/etc/hosts") {
-        for line in content.lines() {
-            let line = line.trim();
-            if line.starts_with('#') || line.is_empty() {
-                continue;
-            }
-            let tokens: Vec<&str> = line.split_whitespace().collect();
-            if tokens.len() < 2 {
-                continue;
-            }
-            // Check if hostname appears as any alias on this line
-            if tokens[1..].iter().any(|t| *t == hostname) {
-                // Return the first dotted name (FQDN) on the line
-                for token in &tokens[1..] {
-                    if token.contains('.') {
-                        return token.to_string();
-                    }
-                }
-            }
-        }
+    match unsafe { CStr::from_ptr(buf.as_ptr() as *const libc::c_char) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => "localhost".to_string(),
     }
-
-    hostname
 }
 
 /// Derive a deterministic port for a chain's auth-svc.
@@ -276,12 +241,21 @@ fn chain_port(chain: &str) -> u16 {
 fn read_signing_host() -> String {
     match std::fs::read_to_string("/run/libpam-web3/signing_host") {
         Ok(s) => {
-            let trimmed = s.trim().to_string();
+            let trimmed = s.trim();
             if !trimmed.is_empty() {
-                return trimmed;
+                return trimmed.to_string();
             }
+            syslog("signing_host file is empty; falling back to gethostname()");
         }
-        Err(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Expected when libpam-web3-signing-host.service hasn't run yet.
+        }
+        Err(e) => {
+            syslog(&format!(
+                "failed to read /run/libpam-web3/signing_host: {}",
+                e
+            ));
+        }
     }
     derive_hostname()
 }
@@ -291,11 +265,10 @@ fn read_signing_host() -> String {
 /// Format: `{scheme}://{signing_host}:{derived_port}` where scheme is
 /// `https` by default, or `http` when `auth.use_tls = false` in config
 /// (for backends like Tor that provide their own encryption).
-fn signing_url_for(chain: &str) -> String {
+fn signing_url_for(chain: &str, config: &Config) -> String {
     let host = read_signing_host();
     let port = chain_port(chain);
-    let use_tls = Config::load().map(|c| c.auth.use_tls).unwrap_or(true);
-    let scheme = if use_tls { "https" } else { "http" };
+    let scheme = if config.auth.use_tls { "https" } else { "http" };
     format!("{}://{}:{}", scheme, host, port)
 }
 
@@ -374,7 +347,7 @@ fn authenticate_impl(handle: &PamHandle) -> Result<String, AuthError> {
     };
 
     // Build signing URL: https://{fqdn}:{derived_port}[?session={id}]
-    let signing_url_base = signing_url_for(&chain_name);
+    let signing_url_base = signing_url_for(&chain_name, &config);
     let signing_url = match &session {
         Some(s) => format!("{}?session={}", signing_url_base, s.session_id),
         None => signing_url_base,
@@ -471,16 +444,24 @@ fn dispatch_callback_sig(
     }
 
     // Must be JSON with a `chain` field
-    let envelope: SigEnvelope = serde_json::from_str(trimmed).map_err(|e| {
+    let envelope: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
         syslog(&format!("Callback .sig: not valid hex or JSON: {}", e));
         AuthError::InvalidSignature
     })?;
 
-    syslog(&format!("Callback .sig: chain={}", envelope.chain));
+    let chain = match envelope.get("chain").and_then(|v| v.as_str()) {
+        Some(c) => c,
+        None => {
+            syslog("Callback .sig: missing or non-string `chain` field");
+            return Err(AuthError::InvalidSignature);
+        }
+    };
 
-    match envelope.chain.as_str() {
+    syslog(&format!("Callback .sig: chain={}", chain));
+
+    match chain {
         "opnet" => verify_opnet(trimmed, otp_instance, config, secret_key),
-        chain => invoke_plugin(chain, trimmed, otp_instance, wallet_address),
+        other => invoke_plugin(other, trimmed, otp_instance, wallet_address),
     }
 }
 
@@ -493,16 +474,8 @@ fn verify_evm(
 ) -> Result<String, AuthError> {
     syslog("EVM signature verification");
 
-    let message = otp_instance.signing_message();
-    syslog(&format!("Message: {}", message));
-
-    let wallet_address = signature::recover_address(&message, sig).map_err(|e| {
-        syslog(&format!("Signature recovery failed: {:?}", e));
-        AuthError::InvalidSignature
-    })?;
-    syslog(&format!("Recovered address: {}", wallet_address));
-
-    // Verify OTP hasn't expired
+    // Cheap timestamp/HMAC check before the EC recovery — no point burning
+    // ecrecover on stale OTPs, and it tightens the failure surface for spam.
     otp_instance
         .verify(
             &otp_instance.code,
@@ -516,7 +489,16 @@ fn verify_evm(
         })?;
     syslog("OTP verified");
 
-    Ok(format!("{}", wallet_address))
+    let message = otp_instance.signing_message();
+    syslog(&format!("Message: {}", message));
+
+    let wallet_address = signature::recover_address(&message, sig).map_err(|e| {
+        syslog(&format!("Signature recovery failed: {:?}", e));
+        AuthError::InvalidSignature
+    })?;
+    syslog(&format!("Recovered address: {}", wallet_address));
+
+    Ok(wallet_address.to_string())
 }
 
 /// OPNet verification: validate OTP, then trust the wallet_address from the
