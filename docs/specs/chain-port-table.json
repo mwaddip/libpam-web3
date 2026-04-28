@@ -1,0 +1,9 @@
+{
+  "_comment": "Golden chain→port table — the single source of truth for the deterministic port assignment used by PAM and every chain auth-svc. The formula is `1024 + (crc32(chain_name) % 64511)`. Each implementation (PAM `chain_port` in Rust, each auth-svc's `chainPort` in TypeScript) MUST produce these values; tests in each repo load this file and assert. If you add a new chain, compute its port and add it here BEFORE shipping the auth-svc binary.",
+  "ports": {
+    "cardano": 34206,
+    "ergo": 22898,
+    "evm": 63108,
+    "opnet": 32448
+  }
+}

@@ -613,3 +613,34 @@ enum AuthError {
     WalletNotFound,
     WalletMismatch,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Golden chain→port table. Five implementations (this Rust function, plus
+    /// the four chain auth-svcs in TypeScript) all compute the same CRC32 of
+    /// the chain name; if any of them drifts by a byte the auth-routing
+    /// silently breaks. Each implementation's tests assert against the JSON
+    /// fixture at docs/specs/chain-port-table.json — keep this list in sync
+    /// with that file.
+    #[test]
+    fn test_chain_port_matches_fixture() {
+        let fixture = include_str!("../docs/specs/chain-port-table.json");
+        let parsed: serde_json::Value = serde_json::from_str(fixture).unwrap();
+        let ports = parsed
+            .get("ports")
+            .and_then(|v| v.as_object())
+            .expect("fixture must have a `ports` object");
+
+        for (chain, expected) in ports {
+            let expected_port = expected.as_u64().expect("port must be a number") as u16;
+            let actual = chain_port(chain);
+            assert_eq!(
+                actual, expected_port,
+                "chain_port({}) = {}, fixture says {}",
+                chain, actual, expected_port
+            );
+        }
+    }
+}

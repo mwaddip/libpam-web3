@@ -1,0 +1,12 @@
+{
+  "name": "libpam-web3-evm-auth-svc",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "tsx --test auth-svc-src/*.test.ts"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "tsx": "^4.21.0"
+  }
+}
