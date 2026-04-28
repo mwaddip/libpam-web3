@@ -155,13 +155,40 @@ The auth-svc is internet-facing. Its job is to **sanitize and transport**, not a
 
 ## Plugin Discovery
 
-Plugins are installed to a well-known directory. PAM reads the `chain` field from the `.sig` file and looks up the corresponding plugin.
+Plugins are installed to a well-known directory. Each plugin ships a static
+manifest file written by its postinst — PAM reads those at startup instead of
+forking each binary to ask "info" on every login.
 
 **Discovery path:** `/usr/lib/libpam-web3/plugins/`
 
-**Naming convention:** `{chain}` — e.g. `opnet`, `cardano`
+**Per-plugin files:**
 
-When PAM encounters `"chain": "cardano"` in a `.sig` file, it looks for `/usr/lib/libpam-web3/plugins/cardano`.
+| Path | Owner | Purpose |
+|------|-------|---------|
+| `<PLUGIN_DIR>/<chain>` | Plugin .deb | The verification binary |
+| `<PLUGIN_DIR>/<chain>.json` | Plugin .deb | Discovery manifest |
+
+**Manifest format:**
+```json
+{
+  "chain": "<chain>",
+  "address_pattern": "<rust-regex>"
+}
+```
+
+| Field | Type | Constraints |
+|-------|------|-------------|
+| `chain` | string | Lowercase ASCII alphanumeric + underscore. Must equal the manifest filename stem AND the binary filename. |
+| `address_pattern` | string | Rust-regex pattern PAM matches against GECOS `wallet=` to route a user's auth to this plugin. |
+
+**At login:** PAM scans `<PLUGIN_DIR>/*.json`, parses each manifest, compiles
+each `address_pattern`, and confirms the matching `<chain>` binary is present
+and executable. Plugins whose manifest is malformed, whose chain doesn't match
+the filename, or whose binary is missing are skipped (logged).
+
+When PAM encounters `"chain": "cardano"` in a `.sig` file, it looks for the
+already-discovered Cardano plugin and invokes the binary at
+`/usr/lib/libpam-web3/plugins/cardano`.
 
 ## Implementation
 

@@ -1,17 +1,20 @@
 //! Chain-specific verification plugin system.
 //!
-//! Plugins are standalone executables installed to [`PLUGIN_DIR`]. PAM discovers
-//! them at startup by sending `{"command":"info"}` to each binary and caching
-//! the response. At auth time, PAM matches the user's GECOS wallet address
+//! Plugins are standalone executables installed to [`PLUGIN_DIR`]. Each plugin
+//! ships a static manifest at `<PLUGIN_DIR>/<chain>.json` written by its
+//! postinst — PAM reads those at discovery instead of forking the binary on
+//! every login. At auth time, PAM matches the user's GECOS wallet address
 //! against each plugin's `address_pattern` regex to find the right chain.
 //!
 //! # Plugin Protocol
 //!
-//! ## Discovery (info)
+//! ## Discovery (manifest)
 //!
-//! **stdin:** `{"command":"info"}`
-//! **stdout:** `{"chain":"cardano","address_pattern":"^addr..."}`
-//! **exit:** 0 = success
+//! Each plugin ships `<PLUGIN_DIR>/<chain>.json`:
+//! ```json
+//! {"chain":"cardano","address_pattern":"^addr(_test)?1[a-z0-9]+$"}
+//! ```
+//! The binary lives at `<PLUGIN_DIR>/<chain>` (filename = the `chain` field).
 //!
 //! ## Verification (verify)
 //!
@@ -31,15 +34,13 @@ pub const PLUGIN_DIR: &str = "/usr/lib/libpam-web3/plugins";
 /// Maximum time a plugin may run before being killed.
 const PLUGIN_TIMEOUT_SECS: u64 = 10;
 
-/// Maximum time for the info command (should be near-instant).
-const INFO_TIMEOUT_SECS: u64 = 2;
-
 // ── Discovery ────────────────────────────────────────────────────────
 
-/// Plugin metadata returned by the `info` command.
+/// Plugin metadata read from the install-time manifest.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PluginInfo {
-    /// Chain identifier (e.g. "cardano", "opnet"). Must match the .sig `chain` field.
+    /// Chain identifier (e.g. "cardano", "opnet"). Must match the .sig `chain` field
+    /// AND the binary filename.
     pub chain: String,
     /// Regex pattern that matches wallet addresses handled by this plugin.
     pub address_pattern: String,
@@ -64,9 +65,11 @@ impl DiscoveredPlugin {
     }
 }
 
-/// Scan the plugin directory and query each plugin for its info.
-/// Returns a list of successfully discovered plugins. Plugins that fail
-/// to respond or return invalid info are logged and skipped.
+/// Scan the plugin directory for `<chain>.json` manifests. Each manifest names
+/// the chain and address pattern; the corresponding binary is expected at
+/// `<PLUGIN_DIR>/<chain>` (must exist and be executable, else the plugin is
+/// skipped). No subprocess spawn at discovery — manifests are static, so
+/// discovery is one readdir + N small reads.
 pub fn discover_plugins() -> Vec<DiscoveredPlugin> {
     let dir = Path::new(PLUGIN_DIR);
     if !dir.is_dir() {
@@ -81,61 +84,69 @@ pub fn discover_plugins() -> Vec<DiscoveredPlugin> {
     let mut plugins = Vec::new();
 
     for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() || !is_executable(&path) {
+        let manifest_path = entry.path();
+        if manifest_path.extension().and_then(|s| s.to_str()) != Some("json") {
             continue;
         }
 
-        match query_plugin_info(&path) {
-            Ok(info) => {
-                let compiled_pattern = regex::Regex::new(&info.address_pattern).ok();
-                if compiled_pattern.is_none() {
-                    // Log but still register — pattern may be fixed later
-                    eprintln!(
-                        "plugin {}: invalid address_pattern regex: {}",
-                        path.display(),
-                        info.address_pattern
-                    );
-                }
-                plugins.push(DiscoveredPlugin {
-                    info,
-                    path,
-                    compiled_pattern,
-                });
-            }
+        let info = match read_manifest(&manifest_path) {
+            Ok(i) => i,
             Err(e) => {
-                eprintln!("plugin {}: info failed: {}", path.display(), e);
+                eprintln!("plugin manifest {}: {}", manifest_path.display(), e);
+                continue;
             }
+        };
+
+        let binary_path = dir.join(&info.chain);
+        if !binary_path.is_file() || !is_executable(&binary_path) {
+            eprintln!(
+                "plugin manifest {} names chain={} but binary {} is missing or non-executable",
+                manifest_path.display(),
+                info.chain,
+                binary_path.display()
+            );
+            continue;
         }
+
+        let compiled_pattern = regex::Regex::new(&info.address_pattern).ok();
+        if compiled_pattern.is_none() {
+            eprintln!(
+                "plugin {}: invalid address_pattern regex: {}",
+                manifest_path.display(),
+                info.address_pattern
+            );
+        }
+
+        plugins.push(DiscoveredPlugin {
+            info,
+            path: binary_path,
+            compiled_pattern,
+        });
     }
 
     plugins
 }
 
-/// Send `{"command":"info"}` to a plugin and parse the response.
-fn query_plugin_info(path: &Path) -> Result<PluginInfo, String> {
-    let input = r#"{"command":"info"}"#;
-
-    let mut child = Command::new(path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("spawn failed: {}", e))?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(input.as_bytes());
+/// Parse a `<chain>.json` manifest file.
+fn read_manifest(path: &Path) -> Result<PluginInfo, String> {
+    let content = std::fs::read_to_string(path).map_err(|e| format!("read failed: {}", e))?;
+    let info: PluginInfo =
+        serde_json::from_str(&content).map_err(|e| format!("invalid manifest JSON: {}", e))?;
+    if info.chain.is_empty() {
+        return Err("manifest has empty chain".to_string());
     }
-
-    let output = wait_with_timeout(&mut child, Duration::from_secs(INFO_TIMEOUT_SECS))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(format!("exit {}: {}", output.status, stderr));
+    if info.address_pattern.is_empty() {
+        return Err("manifest has empty address_pattern".to_string());
     }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    serde_json::from_str(&stdout).map_err(|e| format!("invalid info JSON: {}", e))
+    // Sanity: filename must match `<chain>.json`.
+    let expected_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    if expected_stem != info.chain {
+        return Err(format!(
+            "manifest filename {}.json does not match chain field {}",
+            expected_stem, info.chain
+        ));
+    }
+    Ok(info)
 }
 
 /// Find the plugin that handles a given wallet address.
@@ -357,6 +368,85 @@ mod tests {
         // Plugin dir doesn't exist in test env
         let plugins = discover_plugins();
         assert!(plugins.is_empty());
+    }
+
+    #[test]
+    fn test_read_manifest_round_trip() {
+        use std::io::Write;
+        let dir = tempdir();
+        let manifest_path = dir.path().join("cardano.json");
+        let mut f = std::fs::File::create(&manifest_path).unwrap();
+        writeln!(
+            f,
+            r#"{{"chain":"cardano","address_pattern":"^addr(_test)?1[a-z0-9]+$"}}"#
+        )
+        .unwrap();
+        drop(f);
+
+        let info = read_manifest(&manifest_path).unwrap();
+        assert_eq!(info.chain, "cardano");
+        assert!(info.address_pattern.starts_with("^addr"));
+    }
+
+    #[test]
+    fn test_read_manifest_filename_chain_mismatch() {
+        use std::io::Write;
+        let dir = tempdir();
+        // Filename says ergo, content says cardano — defense against
+        // a misconfigured package shipping the wrong manifest.
+        let manifest_path = dir.path().join("ergo.json");
+        let mut f = std::fs::File::create(&manifest_path).unwrap();
+        writeln!(
+            f,
+            r#"{{"chain":"cardano","address_pattern":"^addr1[a-z0-9]+$"}}"#
+        )
+        .unwrap();
+        drop(f);
+
+        let result = read_manifest(&manifest_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_manifest_empty_chain_rejected() {
+        use std::io::Write;
+        let dir = tempdir();
+        let manifest_path = dir.path().join(".json");
+        let mut f = std::fs::File::create(&manifest_path).unwrap();
+        writeln!(f, r#"{{"chain":"","address_pattern":"^.*$"}}"#).unwrap();
+        drop(f);
+
+        let result = read_manifest(&manifest_path);
+        assert!(result.is_err());
+    }
+
+    /// Tiny replacement for the tempfile crate (we removed it as a dev-dep
+    /// in Tier 2). Just enough for these smoke tests — creates a uniquely
+    /// named directory under TMPDIR and leaks it, which is fine for tests.
+    fn tempdir() -> TestDir {
+        let id = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let p = std::env::temp_dir().join(format!("pam_web3_plugin_test_{}", id));
+        std::fs::create_dir_all(&p).unwrap();
+        TestDir(p)
+    }
+
+    struct TestDir(PathBuf);
+    impl TestDir {
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     /// Spawn `/bin/sh -c <script>` with piped stdio. We don't write the

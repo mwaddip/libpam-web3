@@ -51,61 +51,73 @@ plugin_invariants:
     rule: "Each invocation handles exactly one command (info or verify)"
     rationale: "No session state, no multi-step protocols"
 
-# ─── Discovery Command ──────────────────────────────────────────────
+# ─── Discovery Manifest ─────────────────────────────────────────────
 
 discovery:
-  command: info
+  mechanism: static-manifest
   description: >
-    PAM sends this at startup to learn what chain the plugin handles
-    and what wallet address format it recognizes.
+    Each plugin's postinst writes a static JSON manifest at install
+    time. PAM reads the manifests at SSH-login startup — no subprocess
+    spawn, no info-command round trip — so discovery cost is one
+    readdir + N small reads, not N forks.
 
-  preconditions:
-    stdin_format:
-      rule: "stdin is exactly the JSON string {\"command\":\"info\"}"
-      type: "structural"
+  manifest_path:
+    rule: "<PLUGIN_DIR>/<chain>.json"
+    example: "/usr/lib/libpam-web3/plugins/cardano.json"
+    note: "Filename stem MUST equal the chain field."
 
-    binary_executable:
-      rule: "Binary exists and has executable permission"
-      enforced_by: "Caller checks is_file() && mode & 0o111 before spawn"
-
-  postconditions:
-    on_success:  # exit 0
-      stdout_valid_json:
-        rule: "stdout is a single valid JSON object"
-
-      chain_field:
-        rule: "JSON contains 'chain': non-empty string"
+  manifest_format:
+    type: "single JSON object"
+    fields:
+      chain:
+        type: "non-empty string"
         constraint: "ASCII lowercase alphanumeric + underscore: [a-z0-9_]+"
-        uniqueness: "No two installed plugins may return the same chain value"
-        examples: ["cardano", "opnet", "solana"]
+        uniqueness: "No two installed manifests may declare the same chain"
+        examples: ["cardano", "opnet", "ergo"]
 
-      address_pattern_field:
-        rule: "JSON contains 'address_pattern': non-empty string that is a valid regex"
+      address_pattern:
+        type: "non-empty string, valid regex"
         engine: "Rust regex crate (PCRE-like, no lookaround)"
         purpose: >
-          PAM compiles this regex and matches it against the user's GECOS wallet
-          address to determine which plugin handles which user.
+          PAM compiles this regex and matches it against the user's
+          GECOS wallet address to determine which plugin handles
+          which user.
         examples:
           - "^addr(_test)?1[a-z0-9]+$"       # Cardano (mainnet + testnet)
-          - "^(bc1|tb1|bcrt1)[a-z0-9]+$"      # OPNet (Bitcoin-style)
+          - "^[39][1-9A-HJ-NP-Za-km-z]{51}$" # Ergo P2PK (mainnet + testnet)
+          - "^0x[0-9a-f]{64}$"               # OPNet ML-DSA address
 
-      no_extra_output:
-        rule: "No output after the JSON object (trailing whitespace permitted)"
+  binary:
+    location:
+      rule: "<PLUGIN_DIR>/<chain> (filename equals the manifest's chain field)"
+    requirements:
+      rule: "is_file() && mode & 0o111 != 0"
+      consequence: "Manifest with missing or non-executable binary is skipped (logged)."
 
-    on_failure:  # exit non-zero
-      skip:
-        rule: "Caller logs the error and skips this plugin — not fatal to PAM startup"
-      stderr:
-        rule: "stderr MAY contain a diagnostic message (logged by caller)"
+  caller_obligations:
+    parse_and_compile:
+      rule: >
+        PAM parses each manifest, compiles the address_pattern, and
+        verifies the binary exists and is executable. Failures are
+        logged and the plugin is skipped (not fatal to PAM startup).
 
-  invariants:
-    idempotent:
-      rule: "Multiple info calls return the same response"
-      rationale: "Caller may cache the result"
+    no_subprocess_at_discovery:
+      rule: >
+        PAM MUST NOT spawn the plugin binary during discovery. Manifests
+        are the single source of plugin metadata — runtime info-querying
+        was removed in protocol v2.
 
-    fast:
-      rule: "Must complete within INFO_TIMEOUT_SECS (2s)"
-      rationale: "Discovery runs for every installed plugin at every SSH login"
+  plugin_obligations:
+    consistent_install:
+      rule: >
+        Plugin postinst MUST write the manifest atomically alongside
+        the binary. If only one of {binary, manifest} is present, PAM
+        skips the plugin and logs a warning.
+
+    filename_match:
+      rule: >
+        Manifest filename stem MUST equal the chain field MUST equal
+        the binary filename. PAM rejects mismatches as misconfiguration.
 
 # ─── Verification Command ───────────────────────────────────────────
 
