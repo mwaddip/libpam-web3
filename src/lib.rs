@@ -419,11 +419,13 @@ fn authenticate_impl(handle: &PamHandle) -> Result<String, AuthError> {
         syslog("Empty signature");
         return Err(AuthError::NoSignature);
     };
+    let head: String = sig.chars().take(10).collect();
+    let tail: String = sig.chars().rev().take(10).collect::<String>().chars().rev().collect();
     syslog(&format!(
         "Got signature ({}): {}...{}",
         if from_callback { "callback" } else { "manual" },
-        &sig[..10.min(sig.len())],
-        &sig[sig.len().saturating_sub(10)..]
+        head,
+        tail
     ));
 
     // Dispatch verification
