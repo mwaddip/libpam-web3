@@ -123,9 +123,13 @@ JSON object, single line:
 
 ### Output
 
-- **stdout:** Wallet address on success (single line, trimmed). This is the address PAM matches against GECOS `wallet=`.
-- **exit 0:** Signature verified, stdout contains the wallet address.
-- **exit non-zero:** Verification failed. stderr may contain a reason (logged by PAM).
+- **exit 0:** Signature is authentic AND the address derived from it matches
+  the `wallet_address` PAM passed in. Authentication granted.
+- **exit non-zero:** Verification failed (bad signature, wrong derived address,
+  malformed input, …). stderr MAY contain a reason (logged by PAM).
+- **stdout** is no longer significant under the v2 protocol — PAM trusts the
+  exit code only. A plugin MAY emit debug info but PAM ignores it for the
+  auth decision.
 
 ### Timeout
 
@@ -138,12 +142,12 @@ Plugins have 10 seconds to complete. PAM kills the process after timeout (auth d
 | OTP generation | libpam-web3 (core) |
 | Session file creation / `.sig` polling | libpam-web3 (core) |
 | GECOS parsing (`wallet=`, `nft=`) | libpam-web3 (core) |
-| GECOS wallet matching | libpam-web3 (core) — compares plugin's returned address against GECOS |
 | `.sig` file format (writing) | Auth-svc (plugin package) |
 | `.sig` file reading + `chain` dispatch | libpam-web3 (core) |
-| Signature verification | Plugin — verifies the signature is authentic |
-| Wallet address derivation | Plugin — returns the address to PAM on stdout |
-| Auth decision (yes/no) | libpam-web3 (core), based on plugin result + GECOS match |
+| Signature verification | Plugin — verifies the signature is cryptographically authentic |
+| Address derivation | Plugin — derives the wallet address from the signed material |
+| **Identity comparison (derived vs GECOS)** | **Plugin** — case-sensitivity rules vary per chain (Bech32 lowercase, Base58 case-distinct, EIP-55 mixed); plugin owns this |
+| Auth decision (yes/no) | libpam-web3 (core), trusts plugin exit code |
 
 ### What the auth-svc does NOT do
 

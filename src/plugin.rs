@@ -171,11 +171,16 @@ pub struct VerifyInput<'a> {
 }
 
 /// Result of a plugin invocation.
+///
+/// Under the v2 protocol the plugin owns the verified-vs-expected comparison
+/// internally; PAM just consumes the exit code. Plugin stdout is no longer
+/// significant.
 #[derive(Debug)]
 pub enum PluginResult {
-    /// Plugin verified the signature; contains the wallet address.
-    Verified(String),
-    /// Plugin denied authentication.
+    /// Plugin exited 0 — signature authentic AND derived address matches
+    /// the GECOS wallet PAM passed in.
+    Verified,
+    /// Plugin denied authentication. Reason captured from stderr if any.
     Denied(String),
     /// Plugin binary was not found for this chain.
     NotFound,
@@ -253,12 +258,11 @@ fn exec_plugin(path: &Path, input_json: &str) -> PluginResult {
     };
 
     if output.status.success() {
-        let wallet = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if wallet.is_empty() {
-            PluginResult::Denied("plugin returned empty wallet address".to_string())
-        } else {
-            PluginResult::Verified(wallet)
-        }
+        // Plugin owns the comparison; PAM trusts the exit code only.
+        // stdout MAY contain debug info but is ignored for the auth
+        // decision (defense in depth: an empty exit-0 still authenticates,
+        // because the plugin's own check is the gate).
+        PluginResult::Verified
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let reason = if stderr.is_empty() {

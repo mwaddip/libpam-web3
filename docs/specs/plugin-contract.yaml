@@ -154,44 +154,44 @@ verification:
             value at authentication time.
 
     chain_match:
-      rule: "sig.chain == this plugin's chain from info response"
+      rule: "sig.chain == this plugin's chain (from manifest)"
       enforced_by: "Caller dispatches by chain name"
 
     address_match:
-      rule: "wallet_address matches this plugin's address_pattern"
+      rule: "wallet_address matches this plugin's address_pattern (from manifest)"
       enforced_by: "Caller runs regex match during plugin selection"
 
   postconditions:
     on_success:  # exit 0
-      stdout_wallet:
-        rule: "stdout contains exactly one non-empty string: the verified wallet address"
-        trimming: "Caller trims whitespace from stdout"
+      meaning: >
+        Signature is cryptographically authentic AND the address derived
+        from the signed material matches the wallet_address PAM passed in
+        (per the chain's case-sensitivity rules).
+
+      stdout_ignored:
+        rule: >
+          stdout is not significant. Plugins MAY emit debug info but the
+          caller reads only the exit code. (v1 protocol echoed the
+          verified address on stdout for caller-side comparison; v2 moves
+          the comparison into the plugin since case-fold rules are
+          chain-specific.)
 
       independently_derived:
         rule: >
-          The wallet address MUST be independently derived from or verified
-          against cryptographic material in sig. The plugin MUST NOT simply
-          echo back the wallet_address input.
+          The address MUST be independently derived from cryptographic
+          material in sig. The plugin MUST NOT exit 0 by echoing the
+          wallet_address input without a key→address derivation.
         rationale: >
-          If the plugin echoes wallet_address, any .sig file with the right
-          chain field would authenticate as any user. The plugin must prove
-          that the sig content binds to the returned address.
+          If the plugin doesn't actually derive, any .sig file with the
+          right chain field would authenticate as any user.
         examples:
-          cardano: "Derive address from COSE_Key pubkey via blake2b-224 + bech32, compare against wallet_address, return wallet_address only if match"
-          opnet: "Validate OTP fields in sig match otp_message, return sig.wallet_address (auth-svc already verified ML-DSA)"
-
-      wallet_address_format:
-        rule: "Returned address is in the canonical format for this chain"
-        examples:
-          cardano: "bech32: addr1... or addr_test1..."
-          opnet: "bech32: bc1... or tb1... or bcrt1..."
-          evm: "0x-prefixed checksummed hex (built-in, not a plugin)"
+          cardano: "Derive blake2b-224(Ed25519 pubkey from COSE_Key) and compare to bech32-decoded payment credential of wallet_address."
+          ergo:    "Build type_byte || pubkey || blake2b256(...)[..4], Base58-encode, compare exact-equal to wallet_address."
+          opnet:   "Compare sig.wallet_address (auth-svc-derived as 0x+SHA256(pubkey)) to wallet_address — exact-equal because OPNet is canonical lowercase."
 
     on_failure:  # exit non-zero
       auth_denied:
         rule: "Caller treats this as authentication failure"
-      stdout_ignored:
-        rule: "Caller does not read stdout on non-zero exit"
       stderr:
         rule: "stderr MAY contain a reason string (caller logs to syslog)"
 
@@ -206,18 +206,17 @@ verification:
   invariants:
     fail_secure:
       rule: >
-        If the plugin cannot positively verify the signature, it MUST
-        exit non-zero. Absence of evidence is not evidence of absence.
-        Every code path that does not reach a positive verification
-        MUST terminate with non-zero exit.
-      corollary: "An empty stdout with exit 0 is treated as denial by caller (defense-in-depth)"
+        If the plugin cannot positively verify both authenticity AND the
+        derived-address-equals-wallet_address comparison, it MUST exit
+        non-zero. Every path that does not pass both gates MUST end with
+        a non-zero exit. Absence of evidence is not evidence of absence.
 
     no_identity_trust:
       rule: >
         wallet_address is a reference value, not an identity proof.
-        The plugin MAY use it for comparison (e.g., Cardano compares
-        derived address against it). The plugin MUST NOT return it
-        without independent verification from sig.
+        The plugin compares the cryptographically-derived address against
+        it — the plugin MUST NOT exit 0 just because wallet_address is
+        non-empty.
 
     no_otp_trust:
       rule: >
@@ -225,6 +224,14 @@ verification:
         signed message content. The plugin MUST NOT treat otp_message
         alone as proof of anything — it's a value PAM generated, and
         the user saw it on screen.
+
+    case_sensitivity:
+      rule: >
+        The plugin owns the case-fold decision because the answer is
+        chain-specific: Bech32 (Cardano, Bitcoin segwit) is canonical
+        lowercase; Base58 (Ergo, Bitcoin legacy) is case-distinguishing;
+        EIP-55 (EVM) has mixed-case checksums equivalent under lowercase.
+        PAM MUST NOT post-fold; it just consumes the exit code.
 
 # ─── Caller Obligations ─────────────────────────────────────────────
 # What PAM (src/plugin.rs, src/lib.rs) guarantees to the plugin.
@@ -242,17 +249,15 @@ caller_obligations:
   timeout_enforcement:
     rule: "Caller enforces PLUGIN_TIMEOUT_SECS; kills process on expiry"
 
-  post_comparison:
+  trust_exit_code_only:
     rule: >
-      After plugin returns (exit 0), caller compares returned wallet address
-      against GECOS wallet_address (case-insensitive). Auth succeeds only
-      if they match. This is the final gate — even a compromised plugin
-      cannot authenticate a user whose GECOS doesn't match.
-
-  no_trust_escalation:
-    rule: >
-      Caller treats plugin output as a claim, not a fact. The claim is
-      validated against GECOS before granting access.
+      Under v2, exit 0 from a discovered plugin grants authentication —
+      no caller-side post-comparison of stdout against GECOS. This is
+      sound because (a) the plugin received expected_wallet on stdin,
+      (b) the plugin's exit-0 contract requires comparing it to the
+      cryptographically-derived address, and (c) the manifest-based
+      discovery already binds chain → binary → address_pattern at
+      install time (writable only by root via the .deb postinst).
 
   crash_handling:
     rule: "Plugin crash/signal does not crash PAM. Auth denied on any abnormal termination."

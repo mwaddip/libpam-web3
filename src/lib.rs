@@ -401,20 +401,15 @@ fn authenticate_impl(handle: &PamHandle) -> Result<String, AuthError> {
         tail
     ));
 
-    // Dispatch verification
-    let verified_wallet = if from_callback {
-        dispatch_callback_sig(&sig, &otp_instance, &config, &secret_key, &expected_wallet)?
+    // Dispatch verification. Each chain-specific verifier compares its
+    // recovered/derived address against expected_wallet (the GECOS value)
+    // using whatever case rules apply to its chain — PAM no longer
+    // post-compares, because case-insensitive folding is wrong for
+    // case-sensitive Base58 chains.
+    if from_callback {
+        dispatch_callback_sig(&sig, &otp_instance, &config, &secret_key, &expected_wallet)?;
     } else {
-        verify_evm(&sig, &otp_instance, &config, &secret_key)?
-    };
-
-    // Confirm the verified wallet matches the user's GECOS wallet
-    if verified_wallet.to_lowercase() != expected_wallet.to_lowercase() {
-        syslog(&format!(
-            "Wallet mismatch: verified={} expected={}",
-            verified_wallet, expected_wallet
-        ));
-        return Err(AuthError::WalletMismatch);
+        verify_evm(&sig, &otp_instance, &config, &secret_key, &expected_wallet)?;
     }
 
     syslog(&format!("Auth success for user: {}", username));
@@ -433,14 +428,14 @@ fn dispatch_callback_sig(
     otp_instance: &Otp,
     config: &Config,
     secret_key: &[u8],
-    wallet_address: &str,
-) -> Result<String, AuthError> {
+    expected_wallet: &str,
+) -> Result<(), AuthError> {
     let trimmed = sig.trim();
 
     // EVM: raw hex signature (0x + 130 hex chars = 132 total)
     if trimmed.starts_with("0x") && trimmed.len() == 132 {
         syslog("Callback .sig: EVM raw hex detected");
-        return verify_evm(trimmed, otp_instance, config, secret_key);
+        return verify_evm(trimmed, otp_instance, config, secret_key, expected_wallet);
     }
 
     // Must be JSON with a `chain` field
@@ -460,18 +455,23 @@ fn dispatch_callback_sig(
     syslog(&format!("Callback .sig: chain={}", chain));
 
     match chain {
-        "opnet" => verify_opnet(trimmed, otp_instance, config, secret_key),
-        other => invoke_plugin(other, trimmed, otp_instance, wallet_address),
+        "opnet" => verify_opnet(trimmed, otp_instance, config, secret_key, expected_wallet),
+        other => invoke_plugin(other, trimmed, otp_instance, expected_wallet),
     }
 }
 
-/// EVM verification: secp256k1 ecrecover to recover wallet address from signature.
+/// EVM verification: ecrecover, then compare against expected_wallet.
+///
+/// alloy's `Address::FromStr` accepts any-case hex (with or without checksum),
+/// so the `==` between the parsed expected and the recovered Address is the
+/// canonical EVM-correct match.
 fn verify_evm(
     sig: &str,
     otp_instance: &Otp,
     config: &Config,
     secret_key: &[u8],
-) -> Result<String, AuthError> {
+    expected_wallet: &str,
+) -> Result<(), AuthError> {
     syslog("EVM signature verification");
 
     // Cheap timestamp/HMAC check before the EC recovery — no point burning
@@ -490,25 +490,38 @@ fn verify_evm(
     syslog("OTP verified");
 
     let message = otp_instance.signing_message();
-    syslog(&format!("Message: {}", message));
-
-    let wallet_address = signature::recover_address(&message, sig).map_err(|e| {
+    let recovered = signature::recover_address(&message, sig).map_err(|e| {
         syslog(&format!("Signature recovery failed: {:?}", e));
         AuthError::InvalidSignature
     })?;
-    syslog(&format!("Recovered address: {}", wallet_address));
 
-    Ok(wallet_address.to_string())
+    let expected: alloy_primitives::Address = expected_wallet.parse().map_err(|_| {
+        syslog(&format!("GECOS wallet not a valid EVM address: {}", expected_wallet));
+        AuthError::WalletMismatch
+    })?;
+
+    if recovered != expected {
+        syslog(&format!(
+            "EVM wallet mismatch: recovered={} expected={}",
+            recovered, expected
+        ));
+        return Err(AuthError::WalletMismatch);
+    }
+
+    Ok(())
 }
 
 /// OPNet verification: validate OTP, then trust the wallet_address from the
 /// auth-svc's assertion. The auth-svc has already verified the ML-DSA signature.
+/// OPNet addresses are 0x + lowercase hex by construction, so case-sensitive
+/// equality is correct here.
 fn verify_opnet(
     sig_json: &str,
     otp_instance: &Otp,
     config: &Config,
     secret_key: &[u8],
-) -> Result<String, AuthError> {
+    expected_wallet: &str,
+) -> Result<(), AuthError> {
     syslog("OPNet callback verification");
 
     let opnet: OPNetSig = serde_json::from_str(sig_json).map_err(|e| {
@@ -534,18 +547,29 @@ fn verify_opnet(
         return Err(AuthError::InvalidSignature);
     }
 
-    Ok(opnet.wallet_address)
+    if opnet.wallet_address != expected_wallet {
+        syslog(&format!(
+            "OPNet wallet mismatch: asserted={} expected={}",
+            opnet.wallet_address, expected_wallet
+        ));
+        return Err(AuthError::WalletMismatch);
+    }
+
+    Ok(())
 }
 
 /// Invoke an external chain plugin for verification.
-/// The plugin receives the .sig JSON and OTP message on stdin,
-/// returns the wallet address on stdout (exit 0) or denies (non-zero).
+///
+/// The plugin owns the comparison: PAM passes expected_wallet on stdin, and
+/// the plugin internally derives the address from cryptographic material and
+/// compares it with whatever case rules apply to that chain. PAM trusts only
+/// the exit code — stdout is ignored (post-v2 protocol).
 fn invoke_plugin(
     chain: &str,
     sig_json: &str,
     otp_instance: &Otp,
-    wallet_address: &str,
-) -> Result<String, AuthError> {
+    expected_wallet: &str,
+) -> Result<(), AuthError> {
     syslog(&format!("Invoking plugin for chain: {}", chain));
 
     let sig_value: serde_json::Value = serde_json::from_str(sig_json).map_err(|e| {
@@ -555,10 +579,10 @@ fn invoke_plugin(
 
     let otp_message = otp_instance.signing_message();
 
-    match plugin::invoke(chain, &sig_value, &otp_message, wallet_address) {
-        plugin::PluginResult::Verified(wallet) => {
-            syslog(&format!("Plugin verified, wallet: {}", wallet));
-            Ok(wallet)
+    match plugin::invoke(chain, &sig_value, &otp_message, expected_wallet) {
+        plugin::PluginResult::Verified => {
+            syslog(&format!("Plugin verified for chain: {}", chain));
+            Ok(())
         }
         plugin::PluginResult::Denied(reason) => {
             syslog(&format!("Plugin denied: {}", reason));
