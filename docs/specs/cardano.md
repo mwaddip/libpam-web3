@@ -25,40 +25,45 @@ Written by `web3-auth-svc` to `/run/libpam-web3/pending/{session_id}.sig`.
 ```json
 {
   "chain": "cardano",
-  "signature": "<hex-encoded COSE_Sign1>",
-  "public_key": "<hex-encoded COSE_Key>",
+  "ed25519_public_key": "<32-byte raw Ed25519 pubkey, hex>",
   "otp": "<otp code>",
   "machine_id": "<machine identifier>"
 }
 ```
 
-- `signature`: CBOR-encoded COSE_Sign1 structure from CIP-30 `signData` result
-- `public_key`: CBOR-encoded COSE_Key map from CIP-30 `signData` result
-- `otp` and `machine_id`: plaintext, for OTP re-validation
+- `ed25519_public_key`: the **raw 32-byte Ed25519 public key**, already
+  extracted from the CIP-30 COSE_Key by the auth-svc. The plugin uses
+  this directly for blake2b-224 → bech32 derivation; no second CBOR
+  parse, no CBOR dependency in the Rust plugin.
+- `otp` and `machine_id`: plaintext, available for diagnostics.
 
-## Verification Steps
+## Verification split
 
-1. CBOR-decode `signature` as COSE_Sign1: `[protected_headers, unprotected_headers, payload, signature_bytes]`
-2. CBOR-decode `public_key` as COSE_Key map, extract Ed25519 public key from key `-2` (32 bytes)
-3. Verify protected header contains `alg = -8` (EdDSA)
-4. Reconstruct COSE Sig_structure: `["Signature1", protected_headers_bytes, empty_external_aad, payload_bytes]`
-5. Verify Ed25519 signature over `CBOR(Sig_structure)` using the extracted public key
-6. Verify the payload matches the expected OTP message: `"Authenticate to {machine_id} with code: {otp}"`
-7. Derive Cardano address from the public key (blake2b-224 hash of pubkey → bech32 encoding) and compare against `wallet=<addr>` from GECOS
+| Step | Owner | What |
+|------|-------|------|
+| 1. CBOR-decode COSE_Sign1 + COSE_Key | auth-svc | TS, single CBOR parser |
+| 2. Verify Ed25519 signature over the COSE Sig_structure | auth-svc | @noble/curves |
+| 3. Confirm the signed payload matches the expected OTP message | auth-svc | exact-equal |
+| 4. Extract raw 32-byte Ed25519 pubkey from COSE_Key (label −2) | auth-svc | written into the .sig file |
+| 5. Derive blake2b-224(pubkey) and compare to bech32 payment credential | plugin | identity binding |
 
-Steps 1-6: signature authenticity (is this a real signature over the correct message?).
-Step 7: identity verification (does this key belong to the wallet in GECOS?).
+Steps 1-4: signature authenticity (was this signed by the holder of
+the pubkey, over the right message?). Step 5: identity verification
+(does that pubkey belong to the wallet in GECOS?). The CBOR parse
+happens in exactly one place — the TS auth-svc — so there's no risk
+of two parsers silently disagreeing on a malformed input.
 
 ## Key Properties
 
 - **No key recovery:** Ed25519 does not support recovering the public key from a signature — the public key must be provided alongside the signature (via COSE_Key from CIP-30).
 - **Address derivation:** blake2b-224 hash of the Ed25519 public key, bech32-encoded with `addr` or `addr_test` prefix.
-- **COSE structures:** CIP-30 `signData` returns `{ signature: COSE_Sign1, key: COSE_Key }` — both are CBOR-encoded and hex-encoded for transport.
-- **Trust model:** Cryptographic proof. The `.sig` file carries the full signature and public key — the plugin can independently verify without trusting the auth-svc.
+- **CIP-30 transport:** `signData` returns `{ signature: COSE_Sign1, key: COSE_Key }` — the auth-svc parses both in TS, then writes only the parsed-out raw 32-byte pubkey into the .sig file.
+- **Trust model:** the auth-svc verifies the Ed25519 signature before writing; the plugin trusts that the pubkey was authentic and binds it to the GECOS address. (The full COSE blobs are not retained in the .sig file — anyone who could forge them could already write a forged .sig anyway.)
 
 ## Dependencies (for verification plugin)
 
-- CBOR decoder (for COSE_Sign1 and COSE_Key)
-- Ed25519 verification
 - blake2b-224 (for address derivation)
 - bech32 encoding (for address comparison)
+- hex decoder
+
+(No CBOR parser. The auth-svc owns COSE.)
