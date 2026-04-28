@@ -127,12 +127,7 @@ fn query_plugin_info(path: &Path) -> Result<PluginInfo, String> {
         let _ = stdin.write_all(input.as_bytes());
     }
 
-    let output = wait_with_timeout(&mut child, Duration::from_secs(INFO_TIMEOUT_SECS))
-        .map_err(|e| {
-            let _ = child.kill();
-            let _ = child.wait();
-            e
-        })?;
+    let output = wait_with_timeout(&mut child, Duration::from_secs(INFO_TIMEOUT_SECS))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -257,17 +252,14 @@ fn exec_plugin(path: &Path, input_json: &str) -> PluginResult {
     if let Some(mut stdin) = child.stdin.take() {
         if let Err(e) = stdin.write_all(input_json.as_bytes()) {
             let _ = child.kill();
+            let _ = child.wait();
             return PluginResult::ExecError(format!("failed to write to plugin stdin: {}", e));
         }
     }
 
     let output = match wait_with_timeout(&mut child, Duration::from_secs(PLUGIN_TIMEOUT_SECS)) {
         Ok(o) => o,
-        Err(e) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return PluginResult::ExecError(e);
-        }
+        Err(e) => return PluginResult::ExecError(e),
     };
 
     if output.status.success() {
@@ -289,41 +281,63 @@ fn exec_plugin(path: &Path, input_json: &str) -> PluginResult {
 }
 
 /// Wait for a child process with a timeout, polling at short intervals.
+///
+/// Drains stdout and stderr concurrently with the wait so the child cannot
+/// deadlock by filling a 64KB pipe buffer before the parent reads it. On
+/// timeout or poll error, the child is killed and reaped before returning so
+/// the drainer threads observe EOF and can be joined cleanly.
 fn wait_with_timeout(
     child: &mut std::process::Child,
     timeout: Duration,
 ) -> Result<std::process::Output, String> {
+    use std::io::Read;
+    use std::thread;
+
+    let stdout_handle = child.stdout.take().map(|mut s| {
+        thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = s.read_to_end(&mut buf);
+            buf
+        })
+    });
+    let stderr_handle = child.stderr.take().map(|mut s| {
+        thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = s.read_to_end(&mut buf);
+            buf
+        })
+    });
+
     let start = std::time::Instant::now();
     let poll_interval = Duration::from_millis(50);
 
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => {
-                let mut stdout = Vec::new();
-                let mut stderr = Vec::new();
-                if let Some(mut out) = child.stdout.take() {
-                    use std::io::Read;
-                    let _ = out.read_to_end(&mut stdout);
-                }
-                if let Some(mut err) = child.stderr.take() {
-                    use std::io::Read;
-                    let _ = err.read_to_end(&mut stderr);
-                }
-                return Ok(std::process::Output {
-                    status,
-                    stdout,
-                    stderr,
-                });
-            }
+            Ok(Some(status)) => break status,
             Ok(None) => {
                 if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    if let Some(h) = stdout_handle { let _ = h.join(); }
+                    if let Some(h) = stderr_handle { let _ = h.join(); }
                     return Err(format!("plugin timed out after {}s", timeout.as_secs()));
                 }
-                std::thread::sleep(poll_interval);
+                thread::sleep(poll_interval);
             }
-            Err(e) => return Err(format!("failed to poll plugin: {}", e)),
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                if let Some(h) = stdout_handle { let _ = h.join(); }
+                if let Some(h) = stderr_handle { let _ = h.join(); }
+                return Err(format!("failed to poll plugin: {}", e));
+            }
         }
-    }
+    };
+
+    let stdout = stdout_handle.and_then(|h| h.join().ok()).unwrap_or_default();
+    let stderr = stderr_handle.and_then(|h| h.join().ok()).unwrap_or_default();
+
+    Ok(std::process::Output { status, stdout, stderr })
 }
 
 /// Check whether a file is executable (Unix).
@@ -364,5 +378,71 @@ mod tests {
         // Plugin dir doesn't exist in test env
         let plugins = discover_plugins();
         assert!(plugins.is_empty());
+    }
+
+    /// Write a temp shell script and return its path. Closes the writable fd
+    /// so the kernel will let us `execve` it (otherwise: ETXTBSY).
+    fn write_test_script(body: &str) -> tempfile::TempPath {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+        f.flush().unwrap();
+        let mut perms = f.as_file().metadata().unwrap().permissions();
+        perms.set_mode(0o755);
+        f.as_file().set_permissions(perms).unwrap();
+        f.into_temp_path()
+    }
+
+    /// Regression: a child writing more than the OS pipe buffer (~64KB) used to
+    /// block on write() because we only drained stdout/stderr after try_wait
+    /// reported exit. With concurrent drainers, output of any size completes.
+    #[test]
+    fn test_wait_with_timeout_handles_large_output() {
+        // 200KB to stdout AND 200KB to stderr — exercises both drainers past
+        // the pipe-buffer threshold simultaneously.
+        let script = write_test_script(
+            "#!/bin/sh\n\
+             yes A | head -c 200000\n\
+             yes B | head -c 200000 >&2\n\
+             exit 0\n",
+        );
+
+        let mut child = Command::new(&script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        drop(child.stdin.take());
+
+        let output = wait_with_timeout(&mut child, Duration::from_secs(10))
+            .expect("must not deadlock or time out on large output");
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), 200_000);
+        assert_eq!(output.stderr.len(), 200_000);
+    }
+
+    /// Regression: if a child runs longer than the timeout, wait_with_timeout
+    /// must kill it (so drainers see EOF) and return Err without leaking
+    /// threads. Use `exec sleep` so the shell hands its pipes to sleep — when
+    /// we kill the shell, sleep is killed too and pipes close cleanly.
+    #[test]
+    fn test_wait_with_timeout_kills_runaway_child() {
+        let script = write_test_script(
+            "#!/bin/sh\n\
+             exec sleep 60\n",
+        );
+
+        let mut child = Command::new(&script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        drop(child.stdin.take());
+
+        let result = wait_with_timeout(&mut child, Duration::from_millis(500));
+        assert!(result.is_err(), "expected timeout, got {:?}", result);
     }
 }
