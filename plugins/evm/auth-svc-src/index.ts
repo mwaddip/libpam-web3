@@ -117,8 +117,22 @@ function isValidSessionId(id: string): boolean {
   return SESSION_ID_RE.test(id);
 }
 
-function isValidSignature(sig: string): boolean {
-  return EVM_SIG_RE.test(sig);
+/**
+ * Validate and normalize an EVM signature for the .sig file.
+ *
+ * Accepts: 130 hex chars, with or without 0x prefix, any case.
+ * Returns: canonical `0x` + 130 lowercase hex chars, or null if invalid.
+ *
+ * Why normalize: PAM detects EVM .sig by `starts_with("0x") && len == 132`.
+ * A no-prefix or uppercase signature would slip past auth-svc validation
+ * but fail PAM detection, falling through to a JSON-parse error path that
+ * masks the real cause. Canonicalize on write so the .sig file always
+ * matches the PAM detection contract.
+ */
+export function normalizeSignature(sig: string): string | null {
+  if (!EVM_SIG_RE.test(sig)) return null;
+  const stripped = sig.startsWith("0x") ? sig.slice(2) : sig;
+  return "0x" + stripped.toLowerCase();
 }
 
 // ── Route Handlers ────────────────────────────────────────────────────
@@ -197,13 +211,14 @@ function handlePostCallback(
       return;
     }
 
-    if (!isValidSignature(body)) {
+    const normalized = normalizeSignature(body);
+    if (!normalized) {
       sendResponse(res, 400, "invalid signature format");
       return;
     }
 
     try {
-      fs.writeFileSync(tmpPath, body);
+      fs.writeFileSync(tmpPath, normalized);
       fs.renameSync(tmpPath, sigPath);
     } catch (err) {
       console.error(`Failed to write sig for session ${sessionId}: ${err}`);

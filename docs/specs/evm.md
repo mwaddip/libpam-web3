@@ -31,15 +31,24 @@ User pastes raw hex signature into the terminal.
 
 Written by `web3-auth-svc` to `/run/libpam-web3/pending/{session_id}.sig`.
 
-```
-0x<130 hex chars>
-```
+**Canonical form:** `0x` + 130 lowercase hex chars (132 chars total).
 
-Raw hex, same format as manual paste. No JSON wrapper, no `chain` field. The EVM auth-svc writes the signature directly.
+The auth-svc accepts inputs with or without the `0x` prefix and in either
+case, but **normalizes to canonical form before writing**. PAM detects EVM
+.sig files by exact match on `starts_with("0x") && len == 132`; an
+unnormalized signature would slip past auth-svc validation but fail PAM
+detection, falling through to a JSON-parse error path that hides the real
+cause.
 
-**Detection:** PAM reads the `.sig` file. If it's not valid JSON, it's treated as raw hex and goes to the EVM path — inline ecrecover, same as manual paste. Valid JSON without a `chain` field is rejected (auth failure).
+**Detection:** PAM reads the `.sig` file. If it starts with `0x` and is 132
+characters, it goes to the EVM path — inline ecrecover, same as manual
+paste. Otherwise PAM tries JSON; valid JSON with a `chain` field dispatches
+to the named plugin, anything else is rejected.
 
-**Verification:** Inline in PAM module — secp256k1 ecrecover recovers the wallet address from the signature and OTP message, then compares against the GECOS `wallet=` field.
+**Verification:** Inline in PAM module — secp256k1 ecrecover recovers the
+wallet address from the signature and OTP message, then `==`-compares
+against the GECOS `wallet=` field via `alloy_primitives::Address` (case-
+insensitive parsing handles mixed-case EIP-55 checksums correctly).
 
 ## Key Properties
 
