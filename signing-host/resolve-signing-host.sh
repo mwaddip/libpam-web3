@@ -1,8 +1,12 @@
 #!/bin/bash
 #
-# Resolve the signing host for libpam-web3 signing URLs.
-# Runs once at boot (after network-online.target).
-# Writes the result to /run/libpam-web3/signing_host.
+# Resolve the signing host for libpam-web3 signing URLs and (re)generate
+# the TLS cert so its SAN matches. Runs once at boot via
+# libpam-web3-signing-host.service.
+#
+# Outputs:
+#   /run/libpam-web3/signing_host   — the host the user will see in URLs
+#   /etc/libpam-web3/tls/{cert,key}.pem — TLS cert with $HOST in SAN
 #
 # Strategy:
 #   1. Get FQDN from hostname -f
@@ -11,10 +15,16 @@
 #   4. If no  → use <public-ipv6>.sslip.io (dashes for colons)
 #   5. If no  → use <public-ipv4>.sslip.io
 #   6. If no  → use <private-ipv4> (last resort)
+#
+# Whatever host we land on goes into the cert SAN — otherwise the user
+# would see a TLS warning when their browser opens the signing URL, and
+# clicking through cert errors during auth is the original sin of any
+# auth UI.
 
 set -e
 
 OUTPUT="/run/libpam-web3/signing_host"
+TLS_DIR="/etc/libpam-web3/tls"
 mkdir -p "$(dirname "$OUTPUT")"
 
 FQDN="$(hostname -f 2>/dev/null || hostname)"
@@ -79,3 +89,71 @@ fi
 
 echo "$HOST" > "$OUTPUT"
 echo "[SIGN-HOST] Resolved signing host: $HOST → $OUTPUT"
+
+# ── TLS cert: regenerate if missing or SAN doesn't match $HOST ─────────
+
+needs_regen() {
+    [ ! -f "$TLS_DIR/cert.pem" ] && return 0
+    if ! command -v openssl >/dev/null 2>&1; then
+        return 1
+    fi
+    # Match the resolved host as DNS SAN (case-insensitive — DNS labels are)
+    if openssl x509 -in "$TLS_DIR/cert.pem" -noout -ext subjectAltName 2>/dev/null \
+        | grep -qiF "DNS:$HOST"; then
+        return 1
+    fi
+    return 0
+}
+
+if needs_regen; then
+    if ! command -v openssl >/dev/null 2>&1; then
+        echo "[SIGN-HOST] WARNING: openssl missing; cannot regenerate TLS cert"
+        exit 0
+    fi
+
+    mkdir -p "$TLS_DIR"
+
+    # Build SAN list. Always include the resolved host. Also include the
+    # local short hostname and any usable FQDN/IP so existing setups (where
+    # users hit the box by hostname or IP directly) still validate.
+    SAN_LIST="DNS:$HOST"
+    LOCAL_HN="$(hostname 2>/dev/null || true)"
+    if [ -n "$LOCAL_HN" ] && [ "$LOCAL_HN" != "$HOST" ]; then
+        SAN_LIST="$SAN_LIST,DNS:$LOCAL_HN"
+    fi
+    LOCAL_FQDN="$(hostname -f 2>/dev/null || true)"
+    if [ -n "$LOCAL_FQDN" ] \
+        && [ "$LOCAL_FQDN" != "$HOST" ] \
+        && [ "$LOCAL_FQDN" != "$LOCAL_HN" ]; then
+        SAN_LIST="$SAN_LIST,DNS:$LOCAL_FQDN"
+    fi
+    LOCAL_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    if [ -n "$LOCAL_IP" ]; then
+        SAN_LIST="$SAN_LIST,IP:$LOCAL_IP"
+    fi
+
+    # Write to a temp dir, then move into place — openssl can leave a stale
+    # half-written key.pem if it errors after writing the key but before the
+    # cert. Auth-svc TLS load would then mis-pair an old cert with a new key.
+    TMP_DIR="$(mktemp -d)"
+    if openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+        -keyout "$TMP_DIR/key.pem" -out "$TMP_DIR/cert.pem" \
+        -days 3650 -nodes -subj "/CN=$HOST" \
+        -addext "subjectAltName=$SAN_LIST" \
+        2>/dev/null
+    then
+        chmod 600 "$TMP_DIR/key.pem"
+        chmod 644 "$TMP_DIR/cert.pem"
+        mv "$TMP_DIR/key.pem" "$TLS_DIR/key.pem"
+        mv "$TMP_DIR/cert.pem" "$TLS_DIR/cert.pem"
+        echo "[SIGN-HOST] Regenerated TLS cert. SAN=$SAN_LIST"
+        # Reload any running auth-svc instances so they pick up the new cert.
+        # try-restart is a no-op for inactive units (no plugin installed yet).
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl try-restart 'web3-auth-svc-*.service' 2>/dev/null || true
+        fi
+    else
+        echo "[SIGN-HOST] WARNING: openssl failed to generate cert"
+    fi
+    rm -rf "$TMP_DIR"
+fi
