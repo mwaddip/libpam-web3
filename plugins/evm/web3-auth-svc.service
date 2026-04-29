@@ -4,7 +4,7 @@ Description=Web3 Auth Service (EVM)
 # cert with the matching SAN — without this, we may start with a cert
 # whose SAN doesn't match the URL the user sees and they get a TLS warning.
 After=network.target libpam-web3-signing-host.service
-Wants=libpam-web3-signing-host.service
+Requires=libpam-web3-signing-host.service
 
 [Service]
 Type=simple

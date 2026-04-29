@@ -279,6 +279,7 @@ find "$PKG_DIR" -type f -exec chmod 644 {} \;
 chmod 755 "$PKG_DIR/DEBIAN/postinst"
 chmod 755 "$PKG_DIR/DEBIAN/prerm"
 chmod 755 "$PKG_DIR/DEBIAN/postrm"
+chmod 755 "$PKG_DIR/usr/share/libpam-web3/resolve-signing-host.sh"
 chmod 640 "$PKG_DIR/etc/pam_web3/config.toml"
 
 # Build the package
