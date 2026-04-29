@@ -22,6 +22,13 @@ secret_key = "0x<your-64-char-hex-key>"
 otp_length = 6           # 4-19 digits (default: 6)
 otp_ttl_seconds = 300    # seconds before OTP expires (default: 300)
 
+# Whether the signing URL uses HTTPS (default) or plain HTTP.
+# Set to `false` only when the network transport already provides
+# encryption (Tor onion address, mesh VPN, etc.). When false, PAM
+# advertises http://... and the chain auth-svc binds plain HTTP —
+# both pieces read this same flag from this file.
+# use_tls = true
+
 # Signing URL is derived automatically from the hostname and chain:
 #   https://{fqdn}:{crc32_port(chain)}?session={id}
 # No signing_url config needed.

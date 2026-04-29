@@ -190,6 +190,11 @@ secret_key = "CHANGE_ME_generate_with_openssl_rand_hex_32"
 # OTP settings
 otp_length = 6
 otp_ttl_seconds = 300
+# Whether the signing URL uses HTTPS (default) or plain HTTP.
+# Set to false only when the transport already encrypts (Tor, mesh VPN).
+# When false, the chain auth-svc binds plain HTTP — both pieces read
+# this same flag.
+# use_tls = true
 EOF
 
 # Create documentation

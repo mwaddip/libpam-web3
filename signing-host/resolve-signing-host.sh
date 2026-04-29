@@ -9,6 +9,10 @@
 #   /etc/libpam-web3/tls/{cert,key}.pem — TLS cert with $HOST in SAN
 #
 # Strategy:
+#   0. If /etc/blockhost/host-address exists and is non-empty, use that
+#      verbatim and skip discovery — operator (e.g. blockhost onion plugin)
+#      has named the externally-reachable host explicitly. No fallback if
+#      the override resolves to nothing downstream; the operator owns it.
 #   1. Get FQDN from hostname -f
 #   2. Check if it resolves in public DNS (dig @1.1.1.1)
 #   3. If yes → use FQDN
@@ -23,8 +27,12 @@
 
 set -e
 
-OUTPUT="/run/libpam-web3/signing_host"
-TLS_DIR="/etc/libpam-web3/tls"
+# Paths can be overridden via env vars for testing. In production, the
+# defaults are owned by the libpam-web3 package and the operator has no
+# reason to touch them.
+OUTPUT="${SIGNING_HOST_OUTPUT:-/run/libpam-web3/signing_host}"
+TLS_DIR="${SIGNING_HOST_TLS_DIR:-/etc/libpam-web3/tls}"
+OVERRIDE_FILE="${SIGNING_HOST_OVERRIDE_FILE:-/etc/blockhost/host-address}"
 mkdir -p "$(dirname "$OUTPUT")"
 
 FQDN="$(hostname -f 2>/dev/null || hostname)"
@@ -71,7 +79,21 @@ sslip_host() {
 
 # ── Main ──────────────────────────────────────────────────────────────
 
-if [[ "$FQDN" == *"."* ]] && fqdn_resolves "$FQDN"; then
+# Override file takes absolute precedence. Set externally (e.g. by the
+# blockhost onion plugin pushing a host-side .onion into the customer
+# VM) when discovery would land on the wrong name — the public DNS / IP
+# chain below is meaningless on a Tor-only VM with no clearnet identity.
+OVERRIDE_HOST=""
+if [ -s "$OVERRIDE_FILE" ]; then
+    # First non-empty, non-comment line. Trim whitespace.
+    OVERRIDE_HOST="$(grep -v '^[[:space:]]*#' "$OVERRIDE_FILE" \
+        | awk 'NF { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }')"
+fi
+
+if [[ -n "$OVERRIDE_HOST" ]]; then
+    HOST="$OVERRIDE_HOST"
+    echo "[SIGN-HOST] Using override from $OVERRIDE_FILE: $HOST"
+elif [[ "$FQDN" == *"."* ]] && fqdn_resolves "$FQDN"; then
     HOST="$FQDN"
 else
     V6="$(get_public_ipv6)"

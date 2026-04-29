@@ -1,10 +1,14 @@
 /**
- * Shared HTTPS server for libpam-web3 chain auth-svcs.
+ * Shared HTTP/HTTPS server for libpam-web3 chain auth-svcs.
  *
  * Each chain plugin (cardano, opnet, ergo, evm) gets its own auth-svc binary,
  * but the HTTP boilerplate is identical: serve the signing page, return session
  * data, accept signature callbacks. The chain-specific bit is only the
  * "verify and write .sig" callback. This module owns everything else.
+ *
+ * Transport: HTTPS by default. When PAM's config sets `auth.use_tls = false`
+ * (Tor onion mode, mesh VPN, etc.), the server binds plain HTTP — encryption
+ * is the network transport's responsibility in that mode.
  *
  * Plugin entry point pattern (see plugins/<chain>/auth-svc-src/index.ts):
  *
@@ -34,6 +38,7 @@ const DEFAULT_PENDING_DIR = "/run/libpam-web3/pending";
 const DEFAULT_CERT = "/etc/libpam-web3/tls/cert.pem";
 const DEFAULT_KEY = "/etc/libpam-web3/tls/key.pem";
 const DEFAULT_PAGES_DIR = "/usr/share/blockhost/signing-pages";
+const PAM_CONFIG_PATH = "/etc/pam_web3/config.toml";
 
 const SESSION_ID_RE = /^[0-9a-f]{32}$/;
 
@@ -45,6 +50,14 @@ export interface ServerConfig {
   cert: string;
   key: string;
   pages_dir: string;
+  /**
+   * Whether to bind HTTPS (default) or plain HTTP. Mirrors PAM's
+   * `auth.use_tls` in /etc/pam_web3/config.toml — the URL scheme PAM
+   * advertises and the protocol auth-svc binds must agree, so they
+   * read from the same source. Set to `false` only when the network
+   * transport already provides encryption (Tor onion, mesh VPN, etc.).
+   */
+  use_tls: boolean;
 }
 
 /**
@@ -124,10 +137,44 @@ function parseToml(content: string): Record<string, Record<string, unknown>> {
   return result;
 }
 
+/**
+ * Read `auth.use_tls` from PAM's config (/etc/pam_web3/config.toml).
+ *
+ * The PAM module owns this flag — it picks the URL scheme shown to the
+ * user, and auth-svc must bind a matching protocol. Single source of
+ * truth avoids the failure mode where PAM advertises `https://` while
+ * auth-svc binds plain HTTP (or vice versa).
+ *
+ * Defaults to `true` (HTTPS) on any read or parse failure: the existing
+ * deployment behaviour, fail-secure, and matches the Rust default in
+ * `src/config.rs::default_use_tls`.
+ */
+export function loadUseTls(pamConfigPath: string = PAM_CONFIG_PATH): boolean {
+  let content: string;
+  try {
+    content = fs.readFileSync(pamConfigPath, "utf8");
+  } catch {
+    return true;
+  }
+
+  const toml = parseToml(content);
+  const auth = toml["auth"];
+  if (!auth) return true;
+
+  const value = auth["use_tls"];
+  if (typeof value === "boolean") return value;
+  // TOML true/false are parsed as strings by the minimal parser above
+  // (it doesn't recognise booleans). Treat the literal strings here.
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return true;
+}
+
 export function loadConfig(
   configPath: string,
   chain: string,
   defaultPort: number,
+  pamConfigPath: string = PAM_CONFIG_PATH,
 ): ServerConfig {
   const defaults: ServerConfig = {
     port: defaultPort,
@@ -135,6 +182,7 @@ export function loadConfig(
     cert: DEFAULT_CERT,
     key: DEFAULT_KEY,
     pages_dir: path.join(DEFAULT_PAGES_DIR, chain),
+    use_tls: loadUseTls(pamConfigPath),
   };
 
   let content: string;
@@ -153,6 +201,7 @@ export function loadConfig(
     cert: String(sec.cert || defaults.cert),
     key: String(sec.key || defaults.key),
     pages_dir: String(sec.pages_dir || defaults.pages_dir),
+    use_tls: defaults.use_tls,
   };
 }
 
@@ -304,29 +353,15 @@ function serveFile(
 // ── Server entry point ──────────────────────────────────────────────────
 
 /**
- * Boot the auth-svc HTTPS server.
- *
- * Loads config from /etc/web3-auth/<chain>.toml (overridable via argv[2]),
- * loads the TLS cert/key, binds the routes, and starts listening. Plugins
- * supply only the chain-specific verify-and-write-sig callback in
- * `options`.
+ * Build the request handler shared by both HTTP and HTTPS server variants.
+ * Extracted so the server type (http.Server vs https.Server) can be
+ * decided once based on `use_tls` without duplicating the routing logic.
  */
-export function runServer(options: ChainOptions): void {
-  const configPath = process.argv[2] || `/etc/web3-auth/${options.chain}.toml`;
-  const config = loadConfig(configPath, options.chain, options.defaultPort);
-
-  let tlsOpts: { cert: Buffer; key: Buffer };
-  try {
-    tlsOpts = {
-      cert: fs.readFileSync(config.cert),
-      key: fs.readFileSync(config.key),
-    };
-  } catch (err) {
-    console.error(`[AUTH] TLS cert/key load failed: ${err}`);
-    process.exit(1);
-  }
-
-  const server = https.createServer(tlsOpts, (req, res) => {
+function buildRequestHandler(
+  config: ServerConfig,
+  options: ChainOptions,
+): http.RequestListener {
+  return (req, res) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Cache-Control", "no-store");
 
@@ -357,11 +392,61 @@ export function runServer(options: ChainOptions): void {
     }
 
     sendResponse(res, 404, "Not Found");
-  });
+  };
+}
+
+/**
+ * Build either an HTTPS or plain HTTP server based on `config.use_tls`.
+ *
+ * When `use_tls` is true (the default), the TLS cert/key are read from
+ * disk; missing files cause this function to throw. When `use_tls` is
+ * false the cert/key files are NOT touched — the network transport
+ * (Tor, mesh VPN, etc.) is responsible for encryption.
+ *
+ * Exported so tests can verify the right server variant is built without
+ * actually starting a listener.
+ */
+export function buildAuthServer(
+  config: ServerConfig,
+  options: ChainOptions,
+): http.Server {
+  const handler = buildRequestHandler(config, options);
+
+  if (!config.use_tls) {
+    return http.createServer(handler);
+  }
+
+  const tlsOpts = {
+    cert: fs.readFileSync(config.cert),
+    key: fs.readFileSync(config.key),
+  };
+  return https.createServer(tlsOpts, handler);
+}
+
+/**
+ * Boot the auth-svc server (HTTPS by default, HTTP when use_tls=false).
+ *
+ * Loads config from /etc/web3-auth/<chain>.toml (overridable via argv[2])
+ * and `auth.use_tls` from /etc/pam_web3/config.toml. Plugins supply only
+ * the chain-specific verify-and-write-sig callback in `options`.
+ */
+export function runServer(options: ChainOptions): void {
+  const configPath = process.argv[2] || `/etc/web3-auth/${options.chain}.toml`;
+  const config = loadConfig(configPath, options.chain, options.defaultPort);
+
+  let server: http.Server;
+  try {
+    server = buildAuthServer(config, options);
+  } catch (err) {
+    // Only reachable via the use_tls=true branch (TLS file read failure).
+    console.error(`[AUTH] TLS cert/key load failed: ${err}`);
+    process.exit(1);
+  }
 
   // Bind to all interfaces (dual-stack IPv6).
   server.listen(config.port, "::", () => {
-    console.log(`[AUTH] web3-auth-svc (${options.chain}) on [::]:${config.port}`);
+    const proto = config.use_tls ? "https" : "http";
+    console.log(`[AUTH] web3-auth-svc (${options.chain}) on ${proto}://[::]:${config.port}`);
     console.log(`[AUTH] Pending dir: ${config.pending_dir}`);
     console.log(`[AUTH] Pages: ${config.pages_dir}`);
   });
